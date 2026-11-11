@@ -182,7 +182,7 @@
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
       tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
-      ui: { trackTab: 'panel', panelWeek: null, chartMetric: 'abd' },
+      ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd' }, // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
     };
@@ -1632,7 +1632,7 @@
   // Orden de los apartados de Seguimiento (el del panel lateral): al final de cada uno, una tarjeta lleva al siguiente;
   // el último devuelve al Panel.
   const SEG_FLOW = [
-    ['panel', 'Panel', 'chart', 'Cómo va la semana: peso, cambio frente a la meta, pasos y escalas.'],
+    ['panel', 'Panel', 'chart', 'Cómo va cada etapa: peso, cambio frente a la meta, pasos y escalas.'],
     ['diario', 'Registro diario de peso', 'edit', 'Peso, pasos, escalas, hambre y medidas de cada día.'],
     ['semanal', 'Seguimiento semanal', 'clip', 'Promedios, % buscado y logrado, macros y fotos de cada semana.'],
     ['guia', 'Instrucciones y escalas', 'menu', 'Cómo pesarse, medirse y usar las escalas.'],
@@ -2148,72 +2148,111 @@
     return (v[tab] || segPanel)(a);
   }
 
+  // Semanas del registro que pertenecen a una etapa (las que tienen más días dentro de sus fechas; si es muy corta, las que toca).
+  function stageWeeks(a, s) {
+    const N = weekCount(a), out = [];
+    for (let k = 0; k <= N; k++) if (stageOfWeek(a, k) === s) out.push(k);
+    if (!out.length) for (let k = 0; k <= N; k++) if (weekDays(a, k).some((d) => d >= s.inicio && d <= s.fin)) out.push(k);
+    return out;
+  }
+  // Promedio de un dato diario dentro de las fechas de la etapa y cuántos días lo tienen.
+  function stageDaily(a, s, fn) {
+    const dly = a.tracking.daily || {}, vals = Object.keys(dly).filter((d) => d >= s.inicio && d <= s.fin).map((d) => fn(dly[d] || {})).filter((v) => v != null && isFinite(v));
+    return { avg: vals.length ? mean(vals) : null, n: vals.length };
+  }
+  // Panel del seguimiento: se consulta por etapa (las de Plan › Planificación, con sus fechas).
   function segPanel(a) {
-    const N = weekCount(a), cw = currentWeek(a);
-    let k = a.ui.panelWeek; if (k == null || k > N || k < 0) k = cw;
-    const st = status(a, k), l = logrado(a, k), b = buscado(a, k), avg = weekAvg(a, k), avg0 = weekAvg(a, 0);
-    const w = wk(a, k), n = weekWeights(a, k).length, steps = weekSteps(a, k), sk = stageOfWeek(a, k), meta = num(sk && sk.pasos) ?? num(cfgOf(a).metaPasos);
+    const dated = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s));
+    if (!dated.length) return `<div class="card empty"><div class="e-ic">${ic('target', 30)}</div><h2>Aún no hay etapas con objetivo y fechas</h2>
+      <p>El panel se consulta por etapa. ${isClientView() ? 'Tu coach definirá las etapas del proceso.' : 'Define el objetivo y las fechas de una etapa en <a href="#/plan/planif">Plan › Planificación</a>.'}</p></div>`;
+    const sel = dated.find((x) => x.s.id === a.ui.panelStage) || currentStage(a) || dated[0];
+    const s = sel.s, ks = stageWeeks(a, s), cw = currentWeek(a), stt = stageState(s), tg = stageTarget(s);
+    const stTxt = { now: 'en curso', next: 'próxima', done: 'terminada' };
+    // Semana de referencia: la más reciente de la etapa que ya tiene pesajes (si no, la actual o la primera).
+    const past = ks.filter((k) => k <= cw), withW = past.filter((k) => weekWeights(a, k).length);
+    const kRef = withW.length ? withW[withW.length - 1] : past.length ? past[past.length - 1] : ks[0];
+    const st = stt === 'next' ? { key: 'none', label: 'Aún no empieza', msg: `Esta etapa empieza el ${fmtDate(s.inicio)}.` } : status(a, kRef);
+    const l = stt === 'next' ? null : logrado(a, kRef), b = buscado(a, kRef);
+    // Peso de partida de la etapa y último promedio semanal.
+    const own = num(s.pesoInicial), k0 = ks[0], avg0 = weekWeights(a, k0).length ? weekAvg(a, k0) : null;
+    const p0 = own ?? avg0 ?? (k0 === 0 ? pesoInicial(a) : (k0 > 0 ? weekAvg(a, k0 - 1) : null));
+    const p0src = own != null ? 'peso inicial de la etapa' : avg0 != null ? `promedio de su primera semana` : 'peso anterior a la etapa';
+    const kLast = withW.length ? withW[withW.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
+    const elapsed = kLast != null ? kLast - k0 + (own != null ? 0.5 : 0) : 0;
+    const exp = p0 != null && tg != null && kLast != null ? p0 * Math.pow(1 + tg / 100, elapsed) : null;
     const kpi = (lab, val, note) => `<div class="card kpi"><div class="k-label">${lab}</div><div class="k-value">${val}</div><div class="k-note">${note}</div></div>`;
+    const scTxt = (r) => (r.avg != null ? `<span class="sc-val" style="--sc:${scaleColor(r.avg, 0, 5)}">${fmt(r.avg, 1)}</span>` : '—');
+    const adh = stageDaily(a, s, (d) => num(d.adh)), sue = stageDaily(a, s, (d) => num(d.sueno)), ene = stageDaily(a, s, (d) => num(d.energia)), sac = stageDaily(a, s, (d) => num(d.saciedad));
+    const pasos = stageDaily(a, s, (d) => num(d.pasos)), pesajes = stageDaily(a, s, (d) => num(d.peso)), meta = num(s.pasos) ?? num(cfgOf(a).metaPasos);
+    const nDias = (r) => (r.n ? `${r.n} ${r.n === 1 ? 'día anotado' : 'días anotados'} en la etapa. ` : '');
+    const np = (s.diasPeso || []).length, planned = np * past.length;
+    const pos = ks.indexOf(cw);
     const metric = a.ui.chartMetric || 'abd';
     const metrics = [['abd', 'Suma abdominal (cm)', (x) => sumAbd(x)], ['pl', 'Σ 4 pliegues (mm)', (x) => sumPl(x)], ['pecho', 'Pecho (cm)', (x) => num(x.pecho)], ['brazo', 'Brazos (cm)', (x) => num(x.brazo)], ['cadera', 'Cadera (cm)', (x) => num(x.cadera)], ['muslo', 'Muslos (cm)', (x) => num(x.muslo)]];
     const mdef = metrics.find((x) => x[0] === metric) || metrics[0];
-    const mPts = Array.from({ length: N + 1 }, (_, i) => ({ x: parseISO(weekStart(a, i)).getTime(), y: mdef[2](weekMeasures(a, i)), label: weekLabel(i) })).filter((p) => p.y != null);
-    // Escalas de la semana: promedio de los días anotados, con aviso si faltan días.
-    const scv = (f) => weekField(a, k, f);
-    const incNote = (...rs) => { const r = rs.find((x) => x.n > 0 && x.n < 7); return r ? `<span class="inc-pill">Incompleto · ${r.n}/7 días · faltan ${7 - r.n}</span> ` : ''; };
-    const adh = scv('adh'), sue = scv('sueno'), ene = scv('energia'), sac = scv('saciedad');
-    const scTxt = (r) => (r.avg != null ? `<span class="sc-val" style="--sc:${scaleColor(r.avg, 0, 5)}">${fmt(r.avg, 1)}</span>` + (r.n < 7 ? '<small>*</small>' : '') : '—');
+    const mPts = ks.map((k) => ({ x: parseISO(weekStart(a, k)).getTime(), y: mdef[2](weekMeasures(a, k)), label: weekLabel(k) })).filter((pt) => pt.y != null);
+    const rows = ks.map((k, j) => {
+      const avg = weekWeights(a, k).length ? weekAvg(a, k) : null, wl = logrado(a, k), wb = buscado(a, k), ws = status(a, k), stp = weekSteps(a, k), wa = weekField(a, k, 'adh');
+      return `<tr class="${k === cw ? 'today' : ''}"><td class="lbl nowrap">Semana ${j + 1}<span class="muted small"> · ${weekLabel(k).toLowerCase()} del registro</span>${k === cw ? ' <span class="pill gold">Actual</span>' : ''}</td>
+        <td class="nowrap">${fmtDate(weekStart(a, k), true)} – ${fmtDate(addDays(weekStart(a, k), 6), true)}</td>
+        <td class="num"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td><td class="num">${wb != null ? fmtS(wb) + '%' : '—'}</td>
+        <td class="num nowrap">${wl != null && avg != null ? `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.label)}">${fmtS(wl)}%</span>` : '—'}</td>
+        <td class="num">${weekWeights(a, k).length}${np ? `<span class="muted"> / ${np}</span>` : ''}</td>
+        <td class="num">${stp != null ? fmt(stp) : '—'}</td><td class="num">${wa.avg != null ? fmt(wa.avg, 1) : '—'}</td></tr>`;
+    }).join('');
     return `
-    <div class="row" style="justify-content:space-between;margin-bottom:14px">
-      <div class="muted">Selecciona una semana para consultar su progreso, compararlo con el objetivo y revisar la evolución del proceso.</div>
-      <div class="row"><span class="label">Semana a consultar</span>
-        <select class="select" data-bind="ui.panelWeek" data-type="num" style="width:auto;min-width:220px">${Array.from({ length: N + 1 }, (_, i) => i).map((i) => `<option value="${i}" ${i === k ? 'selected' : ''}>${weekLabel(i)} · ${fmtDate(weekStart(a, i))}${i === cw ? ' (actual)' : ''}</option>`).join('')}</select></div>
+    <div class="row" style="justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap">
+      <div class="muted">Selecciona una etapa para consultar su progreso, compararlo con su objetivo y revisar su evolución.</div>
+      <div class="row"><span class="label">Etapa a consultar</span>
+        <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar" style="width:auto;min-width:260px;max-width:100%">${dated.map((x) => `<option value="${x.s.id}" ${x.s === s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${stTxt[stageState(x.s)]})</option>`).join('')}</select></div>
     </div>
     <section class="card status-hero">
-      <div><div class="k-label label">CÓMO VAS ESTA SEMANA</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
-      <div><div class="label">Cambio semanal logrado</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}</div></div>
-      <div><div class="label">Objetivo · ${weekLabel(k)} · ${fmtDate(weekStart(a, k))}</div><div class="big-num" style="font-size:28px">${b != null ? fmtS(b) + '%' : '—'}</div></div>
-      <div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp · Etapa: ${esc(weekEtapa(a, k))}</div></div>
+      <div><div class="k-label label">CÓMO VA LA ETAPA · SEMANA ${ks.indexOf(kRef) + 1} DE ${ks.length}</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
+      <div><div class="label">Cambio semanal logrado</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}</div><div class="small muted">${fmtDate(weekStart(a, kRef), true)} – ${fmtDate(addDays(weekStart(a, kRef), 6), true)}</div></div>
+      <div><div class="label">Objetivo semanal · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${b != null ? fmtS(b) + '%' : '—'}</div><div class="small muted">${esc(s.tipo)}</div></div>
+      <div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp</div></div>
     </section>
     <div class="grid g4 mt16">
-      ${kpi('Peso promedio · semana', avg != null ? `${fmt(avg, 2)}<small>kg</small>` : '—', 'Promedio de los pesajes diarios de la semana.')}
-      ${kpi('Cambio desde el inicio', avg != null && avg0 != null ? `${fmtS(avg - avg0, 1)}<small>kg</small>` : '—', `Frente al peso inicial (${fmt(avg0, 1)} kg).`)}
-      ${kpi('Semana analizada', `${weekLabel(k)}`, `${fmtDate(weekStart(a, k))} – ${fmtDate(addDays(weekStart(a, k), 6))}`)}
-      ${(() => { const dp = (sk && sk.diasPeso) || [], np = dp.length;
-        return np ? kpi('Pesajes · semana', `${n}<small>/ ${np}</small>`, `Meta de la etapa: ${np} ${np === 1 ? 'pesaje' : 'pesajes'} (${dp.slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ')}).`)
-          : kpi('Pesajes · 7 días', `${n}<small>/ 7</small>`, n < 3 ? 'Mínimo recomendado: 3 pesajes semanales.' : 'Días con peso registrado durante la semana.'); })()}
-      ${(() => { const sd = weekStepsDays(a, k), miss = stepsIncomplete(a, k);
-        const note = (miss ? `<span class="inc-pill">Incompleto · ${sd}/7 días · faltan ${miss} por ingresar</span>` : sd === 7 ? '<span class="small">Semana completa · 7/7 días.</span> ' : '')
-          + (meta ? ` Meta diaria: ${fmt(meta)} pasos.` : sd ? '' : ' Promedio de pasos, cuando se registra.');
-        return kpi('Pasos · promedio diario', steps != null ? `${fmt(steps)}${miss ? '<small>*</small>' : ''}` : '—', note); })()}
-      ${kpi('Adherencia · promedio', adh.avg != null ? `${scTxt(adh)}<small>/ 5</small>` : '—', incNote(adh) + 'Si baja de 4, el problema es la adherencia, no la dieta.')}
-      ${kpi('Sueño / energía · promedio', `${scTxt(sue)} / ${scTxt(ene)}`, incNote(sue, ene) + 'Escalas 0–5. Bajo 3 sostenido es señal de alerta.')}
-      ${kpi('Saciedad · promedio', sac.avg != null ? `${scTxt(sac)}<small>/ 5</small>` : '—', incNote(sac) + 'Saciedad percibida (escala 0 a 5).')}
+      ${kpi(`Etapa · E${sel.i + 1}`, stt === 'now' && pos >= 0 ? `Semana ${pos + 1}<small>/ ${ks.length}</small>` : stt === 'next' ? 'Próxima' : stt === 'done' ? 'Terminada' : 'En curso', `${esc(s.tipo)} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}.`)}
+      ${kpi('Peso actual', pL != null ? `${fmt(pL, 2)}<small>kg</small>` : '—', pL != null ? `Promedio de la semana ${ks.indexOf(kLast) + 1} de la etapa, la última con pesajes.` : 'Aún no hay pesajes en esta etapa.')}
+      ${kpi('Cambio en la etapa', pL != null && p0 != null ? `${fmtS(pL - p0, 1)}<small>kg</small>` : '—', `${p0 != null ? `Desde ${fmt(p0, 1)} kg (${p0src})${pL != null ? `: ${fmtS(((pL - p0) / p0) * 100, 1)} %` : ''}. ` : ''}${exp != null ? `Esperado a la fecha: ${fmtS(exp - p0, 1)} kg.` : ''}`)}
+      ${kpi('Pesajes · etapa', `${pesajes.n}${planned ? `<small>/ ${planned}</small>` : ''}`, np ? `Meta de la etapa: ${np} por semana (${(s.diasPeso || []).slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ')}), en ${past.length} ${past.length === 1 ? 'semana transcurrida' : 'semanas transcurridas'}.` : 'Días con peso registrado dentro de la etapa.')}
+      ${kpi('Pasos · promedio diario', pasos.avg != null ? fmt(pasos.avg) : '—', nDias(pasos) + (meta ? `Meta diaria: ${fmt(meta)} pasos.` : ''))}
+      ${kpi('Adherencia · promedio', adh.avg != null ? `${scTxt(adh)}<small>/ 5</small>` : '—', nDias(adh) + 'Si baja de 4, el problema es la adherencia, no la dieta.')}
+      ${kpi('Sueño / energía · promedio', `${scTxt(sue)} / ${scTxt(ene)}`, 'Promedio de la etapa. Escalas 0–5: bajo 3 sostenido es señal de alerta.')}
+      ${kpi('Saciedad · promedio', sac.avg != null ? `${scTxt(sac)}<small>/ 5</small>` : '—', nDias(sac) + 'Saciedad percibida (escala 0 a 5).')}
     </div>
     <section class="card mt16">
-      <div class="card-head"><h3>Evolución del peso</h3><span class="spacer"></span>
-        <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Promedio semanal</span><span><i class="dash"></i>Trayectoria objetivo</span></div></div>
-      <div class="card-body">${weightChart(a)}</div>
+      <div class="card-head"><h3>Semanas de la etapa</h3><span class="sub">${ks.length} ${ks.length === 1 ? 'semana' : 'semanas'} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)}</span></div>
+      <div class="table-wrap" style="border:0;border-radius:0"><table class="t"><thead><tr><th>Semana</th><th>Fechas</th><th class="num">Peso prom. (kg)</th><th class="num">% buscado</th><th class="num">% logrado</th><th class="num">Pesajes</th><th class="num">Pasos prom.</th><th class="num">Adherencia</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
     </section>
     <section class="card mt16">
-      <div class="card-head"><h3>Composición corporal por semana</h3><span class="spacer"></span>
+      <div class="card-head"><h3>Evolución del peso · E${sel.i + 1}</h3><span class="spacer"></span>
+        <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Promedio semanal</span><span><i class="dash"></i>Trayectoria objetivo</span></div></div>
+      <div class="card-body">${weightChart(a, ks, own)}</div>
+    </section>
+    <section class="card mt16">
+      <div class="card-head"><h3>Composición corporal por semana · E${sel.i + 1}</h3><span class="spacer"></span>
         ${SEL('ui.chartMetric', metrics.map((x) => [x[0], x[1]]), { attrs: 'style="width:auto;height:32px"' })}</div>
-      <div class="card-body">${mPts.length ? chartSVG([{ pts: mPts, color: 'var(--c-c)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 220 }) : '<div class="muted center" style="padding:30px">Registra pliegues o perímetros en el “Registro diario de peso” para ver la tendencia (se grafica el promedio de cada semana).</div>'}</div>
+      <div class="card-body">${mPts.length ? chartSVG([{ pts: mPts, color: 'var(--c-c)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 220 }) : '<div class="muted center" style="padding:30px">Registra pliegues o perímetros en el “Registro diario de peso” dentro de las fechas de esta etapa para ver la tendencia (se grafica el promedio de cada semana).</div>'}</div>
     </section>`;
   }
 
-  function weightChart(a) {
-    const N = weekCount(a);
+  // Peso diario, promedio semanal y trayectoria objetivo de las semanas indicadas (todas si no se indican).
+  // start: peso de partida de la trayectoria (si no, el promedio de la primera semana o el de la semana anterior).
+  function weightChart(a, ks, start) {
+    if (!ks) ks = Array.from({ length: weekCount(a) + 1 }, (_, k) => k);
     const daily = [];
-    for (let k = 0; k <= N; k++) weekDays(a, k).forEach((d) => { const v = num(dailyOf(a, d).peso); if (v != null) daily.push({ x: parseISO(d).getTime(), y: v, label: `${fmtDate(d)} · ${fmt(v, 1)} kg` }); });
+    ks.forEach((k) => weekDays(a, k).forEach((d) => { const v = num(dailyOf(a, d).peso); if (v != null) daily.push({ x: parseISO(d).getTime(), y: v, label: `${fmtDate(d)} · ${fmt(v, 1)} kg` }); }));
     const avgs = []; const target = [];
-    let tgt = weekAvg(a, 0);
-    for (let k = 0; k <= N; k++) {
+    let tgt = start ?? weekAvg(a, ks[0]) ?? (ks[0] > 0 ? weekAvg(a, ks[0] - 1) : null);
+    ks.forEach((k, j) => {
       const x = parseISO(addDays(weekStart(a, k), 3)).getTime();
       const v = weekAvg(a, k); if (v != null) avgs.push({ x, y: v, label: `${weekLabel(k)} · ${fmt(v, 2)} kg` });
-      if (tgt != null) { if (k > 0) tgt = tgt * (1 + (buscado(a, k) || 0) / 100); target.push({ x, y: tgt, label: `Objetivo ${weekLabel(k)} · ${fmt(tgt, 2)} kg` }); }
-    }
-    if (!daily.length && avgs.length <= 1) return '<div class="muted center" style="padding:40px">Aún no hay pesajes. Regístralos en “Registro diario de peso”.</div>';
+      if (tgt != null) { if (j > 0) tgt = tgt * (1 + (buscado(a, k) || 0) / 100); target.push({ x, y: tgt, label: `Objetivo ${weekLabel(k)} · ${fmt(tgt, 2)} kg` }); }
+    });
+    if (!daily.length) return '<div class="muted center" style="padding:40px">Aún no hay pesajes en estas fechas. Regístralos en “Registro diario de peso”.</div>';
     return chartSVG([{ pts: target, color: 'var(--muted)', type: 'dash' }, { pts: daily, color: 'var(--chart-dots)', type: 'dots' }, { pts: avgs, color: 'var(--accent)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 300 });
   }
 
