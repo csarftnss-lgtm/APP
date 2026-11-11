@@ -1113,7 +1113,7 @@
     // y no aparece en el menú de los apartados del atleta.
     // En Acceso del cliente tampoco se repiten los apartados: solo el botón de Inicio.
     const inSection = ['cuestionario', 'plan', 'seg', 'pg', 'acceso'].includes(r0), isPG = r0 === 'pg';
-    $('#mainnav').innerHTML = inSection && (A() || isPG) ? (isPG || r0 === 'acceso' ? [['inicio', 'Inicio']] : [['inicio', 'Inicio'], ['cuestionario', 'Cuestionario inicial'], ['plan', 'Planificación'], ['seg', 'Seguimiento']])
+    $('#mainnav').innerHTML = inSection && (A() || isPG) ? (isPG || r0 === 'acceso' ? [['inicio', 'Inicio']] : [['inicio', 'Inicio'], ['cuestionario', 'Cuestionario inicial'], ['plan', 'Plan'], ['seg', 'Seguimiento']])
       .map(([k, l]) => `<a href="#/${k}" class="${r0 === k ? 'active' : ''}">${k === 'inicio' ? ic('chevL', 14) + ' ' : ''}${l}</a>`).join('') : '';
     const a = A();
     $('#topbar-right').innerHTML = `
@@ -1187,7 +1187,7 @@
       <div class="home-hello">
         <div class="eyebrow">Hola, ${esc(PRO_NAME)}</div>
         <h1 class="page-title">¿Qué vas a trabajar hoy?</h1>
-        <div class="page-sub">Cuestionario, Planificación y Seguimiento comparten los datos del atleta activo: lo que cambies en uno se refleja en los demás. Población general funciona por separado.</div>
+        <div class="page-sub">Cuestionario, Plan y Seguimiento comparten los datos del atleta activo: lo que cambies en uno se refleja en los demás. Población general funciona por separado.</div>
       </div>
       ${a ? `<div class="card athlete-bar">
         <span class="avatar sm">${esc(initials)}</span>
@@ -1240,7 +1240,7 @@
       cta: 'Abrir población general' });
     return `<div class="launch-grid">
       ${launchCard({ n: '01', icon: 'clip', color: 'var(--accent)', title: 'Cuestionario inicial', href: '#/cuestionario', desc: 'Datos básicos, objetivo, suplementación, actividad física, nutrición peri-entrenamiento, recordatorio de 24 h y consumo.', status: qStatus, chips: qChips, cta: 'Abrir cuestionario', disabled: dis })}
-      ${launchCard({ n: '02', icon: 'target', color: 'var(--c-c)', title: 'Planificación', href: '#/plan/req', desc: 'Requerimientos, distribución de comidas y menú diario por tipo de día, con la base de alimentos.', status: pStatus, chips: pChips, cta: 'Abrir planificación', disabled: dis })}
+      ${launchCard({ n: '02', icon: 'target', color: 'var(--c-c)', title: 'Plan', href: '#/plan/req', desc: 'Requerimientos, distribución de comidas y menú diario por tipo de día, con la base de alimentos.', status: pStatus, chips: pChips, cta: 'Abrir planificación', disabled: dis })}
       ${launchCard({ n: '03', icon: 'chart', color: 'var(--ok)', title: 'Seguimiento', href: '#/seg', desc: 'Panel de progreso, registro diario, seguimiento semanal, instrucciones y configuración.', status: sStatus, chips: sChips, cta: 'Abrir seguimiento', disabled: dis })}
       ${pgCard}
     </div>`;
@@ -1365,9 +1365,9 @@
         <div class="grid g2">${frecTable(Q_FREC_L)}${frecTable(Q_FREC_R)}</div>`)}
 
       <div class="card card-pad center"><b style="font-size:16px">¡Gracias por responder el cuestionario!</b></div>
-      <a class="card next-stage no-print" href="#/plan/req" aria-label="Siguiente etapa del proceso: Planificación">
+      <a class="card next-stage no-print" href="#/plan/req" aria-label="Siguiente etapa del proceso: Plan">
         <span class="ns-ic">${ic('target', 22)}</span>
-        <span class="ns-text"><span class="ns-eyebrow">Siguiente etapa del proceso</span><b>Planificación</b><span class="small muted">Requerimientos, planificación de la etapa, menú diario y distribución de comidas.</span></span>
+        <span class="ns-text"><span class="ns-eyebrow">Siguiente etapa del proceso</span><b>Plan</b><span class="small muted">Requerimientos, planificación de la etapa, menú diario y distribución de comidas.</span></span>
         <span class="ns-go">${ic('arrowR', 20)}</span>
       </a>`;
 
@@ -1392,14 +1392,15 @@
   const SEG_TABS = [['panel', 'Panel'], ['diario', 'Registro diario de peso'], ['semanal', 'Seguimiento semanal'], ['guia', 'Instrucciones y escalas'], ['config', 'Configuración']];
   const CLIENT_SEG_TABS = SEG_TABS.filter(([k]) => k !== 'config');
   const PLAN_NAV = [
-    ['Planificación', [['req', 'Requerimientos', 'calc'], ['minicut', 'Mini cut', 'chart'], ['planif', 'Planificación', 'target'], ['menu', 'Menú diario', 'menu'], ['dist', 'Distribución de comidas', 'clock'], ['minuta', 'Minuta', 'down']]],
+    ['Plan', [['req', 'Requerimientos', 'calc'], ['planif', 'Planificación', 'target'], ['menu', 'Menú diario', 'menu'], ['dist', 'Distribución de comidas', 'clock'], ['minuta', 'Minuta', 'down']]],
     ['Recursos', [['alimentos', 'Base de alimentos', 'db']]],
   ];
   const SEG_ICONS = { panel: 'chart', diario: 'edit', semanal: 'clip', guia: 'menu', config: 'target', acceso: 'user' };
   const PLAN_LABEL = Object.fromEntries(PLAN_NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
   function viewPlan(tab) {
-    const views = { req: viewReq, minicut: viewMiniCut, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
+    const views = { req: viewReq, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
+    if (tab === 'minicut') tab = 'planif'; // el Mini cut ahora vive dentro de «Planificación»
     if (!views[tab]) tab = 'req';
     const a = A(), segLabel = '';
     return `<div class="plan-layout ${sbCollapsed ? 'sb-collapsed' : ''}">
@@ -1408,7 +1409,7 @@
         <div class="page-head">
           <div class="plan-head">
             <button class="btn sm sb-toggle" data-action="openDrawer" aria-controls="plan-sidebar" aria-expanded="false">${ic('sidebar', 15)}<span>Secciones</span></button>
-            <div><div class="eyebrow">Planificación · ${esc(a.q.nombre || 'Atleta')}</div><div class="page-title">${tab === 'minuta' ? minutaLabel() : PLAN_LABEL[tab]}${segLabel ? ` <span class="title-sub">· ${segLabel}</span>` : ''}</div></div>
+            <div><div class="eyebrow">Plan · ${esc(a.q.nombre || 'Atleta')}</div><div class="page-title">${tab === 'minuta' ? minutaLabel() : PLAN_LABEL[tab]}${segLabel ? ` <span class="title-sub">· ${segLabel}</span>` : ''}</div></div>
           </div>
         </div>
         ${views[tab]()}
@@ -1473,7 +1474,7 @@
       if (k === 'seg' && st) return `<span class="sb-dot" style="background:var(--${st.key === 'ok' ? 'ok' : st.key === 'warn' ? 'warn' : 'bad'})" title="Último estado: ${st.label}"></span>`;
       return '';
     };
-    return `<aside class="sidebar" id="plan-sidebar" aria-label="Secciones de planificación">
+    return `<aside class="sidebar" id="plan-sidebar" aria-label="Secciones del plan">
       <div class="sb-head">
         <div class="sb-athlete" title="${esc(a.q.nombre || '')}"><span class="avatar sm">${esc(initials)}</span>
           <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Sin nombre')}</b><span>${esc(wk(a, cw).etapa || cfgOf(a).etapa)} · Semana ${cw}/${weekCount(a)}</span></div></div>
@@ -1670,7 +1671,8 @@
           <button class="btn sm ghost icon danger" data-action="delObjetivo" data-i="${i}" title="Eliminar objetivo" aria-label="Eliminar objetivo ${i + 1}">${ic('trash', 14)}</button></li>`).join('')}</ol>`
           : '<div class="muted center" style="padding:18px">Sin objetivos. Pulsa «Agregar objetivo».</div>'}
       </div>
-    </section>`;
+    </section>
+    ${viewMiniCut('mt16')}`;
   }
 
   // ---------------- Mini cut ----------------
@@ -1718,7 +1720,7 @@
     const avgs = c.weeks.map((w) => ({ x: day(w.t), y: w.v, label: `Semana ${w.k + 1} · ${fmt(w.v, 2)} kg (${w.n} pesaje${w.n === 1 ? '' : 's'})` }));
     return chartSVG([{ pts: target, color: 'var(--muted)', type: 'dash' }, { pts: dots, color: 'var(--chart-dots)', type: 'dots' }, { pts: avgs, color: 'var(--accent)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 280 });
   }
-  function viewMiniCut() {
+  function viewMiniCut(cls = '') {
     const a = A(), c = miniCutCalc(a), m = c.m;
     const date = (k, label) => `<div class="field"><label for="mc-${k}">${label}</label>${D(`minicut.${k}`, `mc-${k}`)}</div>`;
     const L = (l, v) => `<div class="stat-line"><span>${l}</span><b>${v}</b></div>`;
@@ -1765,8 +1767,8 @@
         ${c.daily.length ? '' : '<div class="small muted mt8">Aún no hay pesajes entre estas fechas: el gráfico muestra solo la trayectoria objetivo.</div>'}`;
     }
     return `
-    <section class="card">
-      <div class="card-head"><h3>Mini cut</h3><span class="sub">Fase corta de déficit: plazo, meta y avance</span></div>
+    <section class="card ${cls}" id="minicut">
+      <div class="card-head"><span class="sec-num">03</span><h3>Mini cut</h3><span class="sub">Fase corta de déficit: plazo, meta y avance</span></div>
       <div class="card-body">
         <div class="grid g3">
           ${date('inicio', 'Fecha inicial')}
@@ -2148,7 +2150,7 @@
       if (k === cw && !ro && live && stored !== live) { setP(`tracking.weeks.${k}.${f}`, live); snap = true; }
       const parts = String(v || '').match(/Kcal:\s*([\d.]+).*?P:\s*([\d.]+).*?CHO:\s*([\d.]+).*?G:\s*([\d.]+)/);
       const body = parts ? `<span class="kc"><b>${fmt(+parts[1])}</b> kcal</span><span><span class="kp">P ${fmt(+parts[2])}</span> · <span class="kcarb">C ${fmt(+parts[3])}</span> · <span class="kg">G ${fmt(+parts[4])}</span></span>` : (v ? esc(v) : '<span class="muted">Completa Planificación</span>');
-      const tag = usePlan ? `<span class="mac-tag" title="Se toma y actualiza automáticamente desde Planificación">${ic('target', 11)} Plan${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
+      const tag = usePlan ? `<span class="mac-tag" title="Se toma y actualiza automáticamente desde Plan">${ic('target', 11)} Plan${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
       return `<td class="computed mac mac-sync">${body}${tag}</td>`;
     };
     // % buscado: muestra el valor de Configuración (objetivo inicial o posterior según la semana);
