@@ -157,11 +157,12 @@
     tip: 'Concentra carbohidratos en el peri-entrenamiento (pre y post) y reparte la proteína de forma homogénea (≈0,4 g/kg por comida).',
   };
   // Pestaña «Planificación»: objetivo de la etapa, fechas y lista de objetivos (parte con 4 en blanco).
-  const newPlanif = () => ({ objetivo: '', inicio: '', termino: '', objetivos: ['', '', '', ''] });
+  // (a.planif —objetivo, fechas y objetivos de la antigua sección «Etapa»— se conserva en los datos guardados, pero ya no se usa:
+  //  sus objetivos pasaron a la etapa que le correspondía; ver migrateAthlete.)
   // Etapa del proceso (Plan › Planificación › Configuración del proceso). diasEntreno y diasPeso: 0 = lunes … 6 = domingo.
   // objetivo: % semanal del peso (siempre positivo; el signo lo da el tipo de etapa).
   const newStage = (tipo = '', o = {}) => Object.assign({ id: uid(), tipo, inicio: '', fin: '', pesoInicial: null, grasaInicial: null,
-    diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
+    diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], objetivos: [''], chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
   const defaultStages = (inicio) => [
     newStage('Pérdida de grasa', { inicio, fin: addDays(inicio, 7 * 12 - 1), objetivo: 1, pasos: 10000, diasPeso: [0, 2, 4] }),
     newStage('Mini cut'), newStage('Mantenimiento'), newStage('Ganancia de masa muscular'),
@@ -884,6 +885,23 @@
       if (old != null && old !== stageTarget(stageOfWeek(a, k))) (t.weeks[k] = isPlain(w) ? w : {}).buscado = old;
     }
   }
+  // Los objetivos ahora son de cada etapa. La primera vez, los de la antigua sección «Etapa» (a.planif) pasan a la etapa
+  // que le correspondía: mismo objetivo y fechas; si no, mismo objetivo; si no, la primera con fechas; si no, la primera.
+  function moveObjetivosToStage(a) {
+    const st = (a.tracking && a.tracking.config && Array.isArray(a.tracking.config.stages)) ? a.tracking.config.stages : [];
+    st.forEach((s) => { if (!Array.isArray(s.objetivos)) s.objetivos = ['']; });
+    const pf = a.planif;
+    if (!st.length || !isPlain(pf) || pf.movedToStages) return; // se hace una sola vez (la marca queda en a.planif)
+    const objs = (Array.isArray(pf.objetivos) ? pf.objetivos : []).map((x) => String(x || '')).filter((x) => x.trim());
+    if (objs.length) {
+      const target = st.find((s) => s.tipo === pf.objetivo && s.inicio === pf.inicio && s.fin === pf.termino) || st.find((s) => s.tipo === pf.objetivo)
+        || st.find(stageDated) || st[0];
+      const own = target.objetivos.map((x) => String(x || '')).filter((x) => x.trim());
+      target.objetivos = own.concat(objs.filter((o) => !own.includes(o)));
+    }
+    pf.movedToStages = true;
+  }
+
   // Alertas de fechas: etapas invertidas, superpuestas, con días sin etapa, que empiezan a mitad de semana
   // y semanas marcadas con otra etapa en el registro.
   function stageAlerts(a) {
@@ -1507,7 +1525,7 @@
   // Orden de los apartados de Plan: al final de cada uno, una tarjeta lleva al siguiente (y la última, a Seguimiento).
   const PLAN_FLOW = [
     ['req', 'Requerimientos', 'calc', 'Gasto energético, objetivo y macros de cada tipo de día.'],
-    ['planif', 'Planificación', 'target', 'Configuración del proceso (etapas), etapa en curso, objetivos y mini cut.'],
+    ['planif', 'Planificación', 'target', 'Configuración del proceso: etapas con fechas, metas, objetivos y gráficos.'],
     ['menu', 'Menú diario', 'menu', 'Calendario de alimentación y comidas de cada tipo de día.'],
     ['dist', 'Distribución de comidas', 'clock', 'Horarios e indicaciones de cada comida.'],
     ['minuta', 'Descargar planificación', 'down', 'Vista previa y descarga del documento en PDF.'],
@@ -1774,200 +1792,9 @@
       <div class="macro-legend mt8"><span><i style="background:var(--c-p)"></i>P ${fmt((t.p * 4 / tot) * 100)}%</span><span><i style="background:var(--c-c)"></i>C ${fmt((t.c * 4 / tot) * 100)}%</span><span><i style="background:var(--c-g)"></i>G ${fmt((t.g * 9 / tot) * 100)}%</span></div>`;
   }
 
-  // ---------------- Planificación de la etapa ----------------
-  // Objetivo de la etapa con sus fechas y la lista de objetivos (editable). Es lo primero del documento que se descarga.
-  const planifOf = (a) => {
-    if (!isPlain(a.planif)) a.planif = newPlanif();
-    if (!Array.isArray(a.planif.objetivos)) a.planif.objetivos = ['', '', '', ''];
-    return a.planif;
-  };
-  // Duración de inicio a término (ambos incluidos): «12 semanas», «5 semanas y 3 días» o «4 días». null si falta una fecha o están invertidas.
-  function planifDuration(p) {
-    if (!parseISO(p.inicio) || !parseISO(p.termino)) return null;
-    const d0 = daysBetween(p.inicio, p.termino); if (d0 < 0) return null;
-    const d = d0 + 1; // se cuentan el primer y el último día, igual que en las etapas de la configuración del proceso
-    const w = Math.floor(d / 7), r = d % 7, pl = (n, s, pls) => `${n} ${n === 1 ? s : pls}`;
-    return w && r ? `${pl(w, 'semana', 'semanas')} y ${pl(r, 'día', 'días')}` : w ? pl(w, 'semana', 'semanas') : pl(r, 'día', 'días');
-  }
-  // Etapa de la configuración del proceso que corresponde a la de «Etapa» (01): mismo objetivo; si hay varias,
-  // la de fechas iguales, luego la que se cruza con estas fechas, luego la primera.
-  function planifStage(a) {
-    const p = planifOf(a); if (!p.objetivo) return null;
-    const c = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => x.s.tipo === p.objetivo);
-    const ok = parseISO(p.inicio) && parseISO(p.termino);
-    return c.find((x) => x.s.inicio === p.inicio && x.s.fin === p.termino)
-      || (ok && c.find((x) => stageDated(x.s) && p.inicio <= x.s.fin && p.termino >= x.s.inicio)) || c[0] || null;
-  }
-  // null si coincide (o si aún no se elige objetivo); si no, qué no coincide.
-  function planifMismatch(a) {
-    const p = planifOf(a); if (!p.objetivo) return null;
-    if (!ETAPAS.includes(p.objetivo)) return { kind: 'notlist' };
-    const m = planifStage(a);
-    if (!m) return { kind: 'nostage' };
-    if (m.s.inicio !== p.inicio || m.s.fin !== p.termino) return { kind: 'dates', ...m };
-    return null;
-  }
-  const rangeTxt = (i, f) => `${parseISO(i) ? fmtDate(i) : 'sin fecha'} – ${parseISO(f) ? fmtDate(f) : 'sin fecha'}`;
-  function planifAlert(a) {
-    const p = planifOf(a), mm = planifMismatch(a); if (!mm) return '';
-    const here = parseISO(p.inicio) || parseISO(p.termino) ? `aquí <b>${rangeTxt(p.inicio, p.termino)}</b>` : 'aquí aún no hay fechas';
-    const body = mm.kind === 'notlist'
-      ? `«${esc(p.objetivo)}» se escribió a mano y no es uno de los objetivos de la lista. Elige el que corresponda para que coincida con las etapas de la configuración del proceso (arriba).`
-      : mm.kind === 'nostage'
-      ? `«${esc(p.objetivo)}» no está entre las etapas de la configuración del proceso (arriba).`
-      : `Las fechas no coinciden con la etapa ${mm.i + 1} «${esc(mm.s.tipo)}» de la configuración del proceso (arriba): ${here}; allá <b>${rangeTxt(mm.s.inicio, mm.s.fin)}</b>.`;
-    const btns = mm.kind === 'notlist' ? '' : mm.kind === 'nostage'
-      ? `<button class="btn sm" data-action="planifAddStage">${ic('plus', 14)} Agregar la etapa «${esc(p.objetivo)}» con estas fechas</button>`
-      : `${stageDated(mm.s) ? `<button class="btn sm" data-action="planifUseStage">Usar las fechas de la configuración</button>` : ''}${parseISO(p.inicio) && parseISO(p.termino) ? `<button class="btn sm ghost" data-action="planifToStage">Llevar estas fechas a la configuración</button>` : ''}`;
-    return `<div class="callout alert-callout mt12" role="alert"><b>La etapa no coincide.</b> ${body}<div class="row mt8" style="gap:8px;flex-wrap:wrap">${btns}</div></div>`;
-  }
-  function viewPlanif() {
-    const a = A(), p = planifOf(a), dur = planifDuration(p), n = p.objetivos.length;
-    const inverted = parseISO(p.inicio) && parseISO(p.termino) && daysBetween(p.inicio, p.termino) < 0;
-    const date = (k, label) => `<div class="field"><label for="pf-${k}">${label}</label>${D(`planif.${k}`, `pf-${k}`)}</div>`;
-    return `${processConfig(a)}
-    <div class="pf-block-head mt24"><h2>Etapa en curso y objetivos</h2><p class="muted small">Lo que sale en el documento que se descarga.</p></div>
-    <section class="card">
-      <div class="card-head"><span class="sec-num">01</span><h3>Etapa</h3><span class="sub">Qué se busca y en qué plazo</span></div>
-      <div class="card-body">
-        <div class="pf-grid">
-          <div class="field"><label for="pf-objetivo">Objetivo de la etapa</label>${SEL('planif.objetivo', [['', 'Selecciona un objetivo'], ...(p.objetivo && !ETAPAS.includes(p.objetivo) ? [p.objetivo] : []), ...ETAPAS], { attrs: 'id="pf-objetivo"' })}</div>
-          ${date('inicio', 'Fecha de inicio')}
-          ${date('termino', 'Fecha de término')}
-        </div>
-        ${inverted ? `<div class="hint mt12" style="color:var(--warn)" role="alert">La fecha de término es anterior a la de inicio.</div>` : dur ? `<div class="hint mt12">Duración de la etapa: <b>${dur}</b>.</div>` : ''}
-        ${planifAlert(a)}
-      </div>
-    </section>
-    <section class="card mt16">
-      <div class="card-head"><span class="sec-num">02</span><h3>Objetivos de la etapa</h3><span class="sub">${n} ${n === 1 ? 'objetivo' : 'objetivos'}</span><span class="spacer"></span>
-        <button class="btn primary sm" data-action="addObjetivo">${ic('plus', 14)} Agregar objetivo</button></div>
-      <div class="card-body">
-        ${n ? `<ol class="pf-list">${p.objetivos.map((_, i) => `<li class="pf-item"><span class="meal-idx" aria-hidden="true">${i + 1}</span>
-          ${TA(`planif.objetivos.${i}`, { rows: 2, ph: `Objetivo ${i + 1}`, attrs: `aria-label="Objetivo ${i + 1}"` })}
-          <button class="btn sm ghost icon danger" data-action="delObjetivo" data-i="${i}" title="Eliminar objetivo" aria-label="Eliminar objetivo ${i + 1}">${ic('trash', 14)}</button></li>`).join('')}</ol>`
-          : '<div class="muted center" style="padding:18px">Sin objetivos. Pulsa «Agregar objetivo».</div>'}
-      </div>
-    </section>
-    ${viewMiniCut('mt16')}`;
-  }
-
-  // ---------------- Mini cut ----------------
-  // Fase corta de déficit. Es la misma etapa «Mini cut» de la configuración del proceso: fechas y % se comparten.
-  // Si hay varias, se muestra la que está en curso, si no la próxima, si no la última.
-  function miniCutStage(a) {
-    const ms = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => x.s.tipo === 'Mini cut');
-    if (!ms.length) return null;
-    const today = todayISO();
-    return ms.find((x) => stageDated(x.s) && x.s.fin >= today) || ms.slice().reverse().find((x) => stageDated(x.s)) || ms[0];
-  }
-  function miniCutCalc(a, st) {
-    const m = { inicio: st.inicio, termino: st.fin, pct: st.objetivo }, pct = num(m.pct);
-    const hasDates = !!(parseISO(m.inicio) && parseISO(m.termino)), days = hasDates ? daysBetween(m.inicio, m.termino) : null;
-    const c = { m, pct, days, valid: hasDates && days > 0, inverted: hasDates && days < 0, pctOk: pct != null && pct > 0 && pct < 100, daily: [], weeks: [] };
-    if (!c.valid) return c;
-    // Pesajes dentro del mini cut (fechas ISO: se comparan como texto).
-    const dly = (a.tracking && a.tracking.daily) || {};
-    c.daily = Object.keys(dly).filter((d) => d >= m.inicio && d <= m.termino).sort()
-      .map((d) => ({ d, t: daysBetween(m.inicio, d), v: num(dly[d] && dly[d].peso) })).filter((p) => p.v != null);
-    // Promedio de cada semana del mini cut (semana 1 = días 0 a 6 desde la fecha inicial).
-    for (let k = 0; k * 7 <= days; k++) {
-      const vs = c.daily.filter((p) => Math.floor(p.t / 7) === k).map((p) => p.v);
-      if (vs.length) c.weeks.push({ k, t: Math.min(k * 7 + 3, days), n: vs.length, v: vs.reduce((x, y) => x + y, 0) / vs.length });
-    }
-    // Peso de partida: el peso inicial de la etapa; si no está, el promedio de la semana 1; si no, el de Requerimientos.
-    const w1 = c.weeks.find((w) => w.k === 0), own = num(st.pesoInicial);
-    c.p0 = own ?? (w1 ? w1.v : eff(a).peso);
-    c.p0src = own != null ? 'peso inicial de la etapa' : w1 ? 'promedio de la semana 1' : 'peso de Requerimientos';
-    if (c.p0 == null || !c.pctOk) return c;
-    // Trayectoria objetivo (t = días desde la fecha inicial). Si el peso de partida es el promedio de la semana 1,
-    // se ancla al centro de esa semana, donde también se grafica ese promedio.
-    const t0 = own == null && w1 ? w1.t : 0;
-    c.target = (t) => c.p0 * Math.pow(1 - pct / 100, (t - t0) / 7);
-    c.pEnd = c.target(days); c.kgTotal = c.p0 - c.pEnd; c.pctTotal = (c.kgTotal / c.p0) * 100;
-    const rc = reqCalc(a);
-    c.kcalDia = ((c.p0 * pct) / 100) * rc.kcalKg / 7; c.kcal = rc.get != null ? rc.get - c.kcalDia : null;
-    const last = c.weeks[c.weeks.length - 1];
-    if (last && last.k > 0) {
-      c.last = last; c.expected = c.target(last.t); c.lost = c.p0 - last.v; c.expLost = c.p0 - c.expected;
-      c.goal = c.kgTotal > 0 ? (c.lost / c.kgTotal) * 100 : null;
-    }
-    return c;
-  }
-  function miniCutChart(c) {
-    const day = (t) => parseISO(addDays(c.m.inicio, t)).getTime();
-    const target = [];
-    for (let t = 0; t < c.days; t += 7) target.push({ x: day(t), y: c.target(t), label: `Objetivo ${fmtDate(addDays(c.m.inicio, t))} · ${fmt(c.target(t), 2)} kg` });
-    target.push({ x: day(c.days), y: c.pEnd, label: `Objetivo final ${fmtDate(c.m.termino)} · ${fmt(c.pEnd, 2)} kg` });
-    const dots = c.daily.map((p) => ({ x: day(p.t), y: p.v, label: `${fmtDate(p.d)} · ${fmt(p.v, 1)} kg` }));
-    const avgs = c.weeks.map((w) => ({ x: day(w.t), y: w.v, label: `Semana ${w.k + 1} · ${fmt(w.v, 2)} kg (${w.n} pesaje${w.n === 1 ? '' : 's'})` }));
-    return chartSVG([{ pts: target, color: 'var(--muted)', type: 'dash' }, { pts: dots, color: 'var(--chart-dots)', type: 'dots' }, { pts: avgs, color: 'var(--accent)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 280 });
-  }
-  function viewMiniCut(cls = '') {
-    const a = A(), ms = miniCutStage(a);
-    const head = `<div class="card-head"><span class="sec-num">03</span><h3>Mini cut</h3><span class="sub">Fase corta de déficit: plazo, meta y avance</span></div>`;
-    if (!ms) return `<section class="card ${cls}" id="minicut">${head}<div class="card-body"><div class="muted center" style="padding:18px">No hay una etapa de Mini cut en la configuración del proceso (arriba).</div>
-      <div class="center"><button class="btn primary sm" data-action="addStage" data-tipo="Mini cut">${ic('plus', 14)} Agregar etapa Mini cut</button></div></div></section>`;
-    const c = miniCutCalc(a, ms.s), m = c.m, sp = `tracking.config.stages.${ms.i}`;
-    const date = (k, f, label) => `<div class="field"><label for="mc-${k}">${label}</label>${D(`${sp}.${f}`, `mc-${k}`)}</div>`;
-    const L = (l, v) => `<div class="stat-line"><span>${l}</span><b>${v}</b></div>`;
-    const dur = c.valid ? stageDur(ms.s) : null, today = todayISO();
-    const empty = (msg) => `<div class="muted center" style="padding:30px">${msg}</div>`;
-    let note = '';
-    if (c.inverted) note = '<div class="hint mt12" style="color:var(--warn)" role="alert">La fecha final es anterior a la fecha inicial.</div>';
-    else if (dur) note = `<div class="hint mt12">Duración del mini cut: <b>${dur}</b>.</div>`;
-    let body;
-    if (!c.valid) body = empty(c.inverted ? 'Corrige las fechas para ver el plan del mini cut.' : 'Elige la fecha inicial y la final para ver el plan y el avance del mini cut.');
-    else if (c.p0 == null) body = empty('Falta el peso del atleta: ingrésalo en «Requerimientos» o registra pesajes en «Seguimiento › Registro diario de peso».');
-    else if (!c.pctOk) body = empty('Indica el % de pérdida buscado por semana para calcular la trayectoria.');
-    else {
-      const elapsed = daysBetween(m.inicio, today);
-      const when = elapsed < 0 ? `Comienza el ${fmtDate(m.inicio)}` : elapsed > c.days ? 'Terminado' : `Día ${elapsed + 1} de ${c.days + 1}`;
-      const goalW = c.goal != null ? Math.max(0, Math.min(100, c.goal)) : 0;
-      body = `
-        <div class="grid g2">
-          <div>
-            <div class="label">Plan</div>
-            ${L('Peso inicial', `${fmt(c.p0, 1)} kg <span class="muted small">· ${c.p0src}</span>`)}
-            ${L('Peso final esperado', `${fmt(c.pEnd, 1)} kg`)}
-            ${L('Pérdida esperada', `${fmtS(-c.kgTotal, 2)} kg <span class="muted small">(${fmtS(-c.pctTotal, 1)} %)</span>`)}
-            ${L('Déficit diario estimado', `${fmt(c.kcalDia)} kcal`)}
-            ${L('Kcal a consumir', c.kcal != null ? `<span class="kc">${fmt(c.kcal)}</span>` : '<span class="muted small">Completa el GET en Requerimientos</span>')}
-          </div>
-          <div>
-            <div class="label">Avance</div>
-            ${L('Momento', when)}
-            ${c.last ? `
-              ${L(`Promedio semana ${c.last.k + 1}`, `${fmt(c.last.v, 2)} kg`)}
-              ${L('Objetivo a esa fecha', `${fmt(c.expected, 2)} kg`)}
-              ${L('Diferencia frente al objetivo', `${fmtS(c.last.v - c.expected, 2)} kg <span class="muted small">${c.last.v - c.expected > 0 ? '(por encima)' : '(en meta o por debajo)'}</span>`)}
-              <div class="stat-line" style="display:block"><div style="display:flex;justify-content:space-between"><span>Pérdida lograda</span><b>${fmtS(-c.lost, 2)} de ${fmtS(-c.kgTotal, 2)} kg${c.goal != null ? ` · ${fmt(c.goal, 0)} %` : ''}</b></div>
-                <div class="progress" role="progressbar" aria-label="Avance hacia la meta del mini cut" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(goalW)}"><span style="width:${goalW}%;--c:var(--ok)"></span></div></div>`
-            : `<div class="small muted mt8">El avance aparece cuando haya pesajes desde la semana 2 del mini cut en «Seguimiento › Registro diario de peso».</div>`}
-          </div>
-        </div>
-        <div class="row mt16" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
-          <div class="label" style="margin:0">Avance del peso</div>
-          <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Promedio semanal</span><span><i class="dash"></i>Trayectoria objetivo</span></div>
-        </div>
-        <div class="mt8 mc-chart">${miniCutChart(c)}</div>
-        ${c.daily.length ? '' : '<div class="small muted mt8">Aún no hay pesajes entre estas fechas: el gráfico muestra solo la trayectoria objetivo.</div>'}`;
-    }
-    return `
-    <section class="card ${cls}" id="minicut">
-      ${head}
-      <div class="card-body">
-        <div class="grid g3">
-          ${date('inicio', 'inicio', 'Fecha inicial')}
-          ${date('termino', 'fin', 'Fecha final')}
-          ${F('% de pérdida de grasa buscado', suffix(I(`${sp}.objetivo`, { num: true, live: true, ph: 'Ej.: 1' }), '% / sem'), 'Del peso corporal, por semana. En un mini cut suele ser 0,75–1,25 %.')}
-        </div>
-        <div class="hint mt8">Son los mismos datos de la etapa ${ms.i + 1} «Mini cut» de la configuración del proceso (arriba): lo que cambies aquí se ve allá y en el registro.</div>
-        ${note}
-        <div class="mt16">${body}</div>
-      </div>
-    </section>`;
-  }
+  // ---------------- Planificación ----------------
+  // La página es la configuración del proceso: cada etapa con su objetivo, fechas, metas, objetivos y gráfico.
+  function viewPlanif() { return processConfig(A()); }
 
   // ---------------- Distribución ----------------
   // Nombre de la preparación en el Menú diario: la descripción de la opción principal (★) o, si no tiene, la de la primera opción que tenga.
@@ -2635,6 +2462,19 @@
   }
   const dayPicker = (i, f, s) => `<div class="dow-pick" role="group">${DOW_L.map((l, d) => { const on = (s[f] || []).includes(d);
     return `<button type="button" class="dow${on ? ' on' : ''}" data-action="toggleStageDay" data-i="${i}" data-f="${f}" data-d="${d}" aria-pressed="${on}" title="${DOW_N[d]}" aria-label="${DOW_N[d]}">${l}</button>`; }).join('')}</div>`;
+  // Lista de objetivos de una etapa (se pueden agregar y quitar). Salen en el documento que se descarga.
+  function stageObjetivos(s, i) {
+    if (!Array.isArray(s.objetivos)) s.objetivos = [''];
+    const n = s.objetivos.length, filled = s.objetivos.filter((x) => String(x || '').trim()).length;
+    return `<div class="stage-objs mt16">
+      <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Objetivos de la etapa <span class="muted">· ${filled} ${filled === 1 ? 'definido' : 'definidos'}</span></div>
+        <button class="btn sm" data-action="addObjetivo" data-i="${i}">${ic('plus', 14)} Agregar objetivo</button></div>
+      ${n ? `<ol class="pf-list mt8">${s.objetivos.map((_, j) => `<li class="pf-item"><span class="meal-idx" aria-hidden="true">${j + 1}</span>
+        ${TA(`tracking.config.stages.${i}.objetivos.${j}`, { rows: 2, ph: `Objetivo ${j + 1}`, attrs: `aria-label="Objetivo ${j + 1} de la etapa ${i + 1}"` })}
+        <button class="btn sm ghost icon danger" data-action="delObjetivo" data-i="${i}" data-j="${j}" title="Eliminar objetivo" aria-label="Eliminar objetivo ${j + 1}">${ic('trash', 14)}</button></li>`).join('')}</ol>`
+        : '<div class="muted small mt8">Sin objetivos. Pulsa «Agregar objetivo».</div>'}
+    </div>`;
+  }
   function stageCard(a, s, i) {
     const p = `tracking.config.stages.${i}`, full = stageFull(s);
     const opts = [['', 'Selecciona un objetivo'], ...(s.tipo && !ETAPAS.includes(s.tipo) ? [s.tipo] : []), ...ETAPAS];
@@ -2665,6 +2505,7 @@
         <button class="btn xs ghost danger" data-action="delStage" data-i="${i}" title="Eliminar etapa" aria-label="Eliminar etapa ${i + 1}">${ic('trash', 13)}</button></div>
       <div class="card-body">
         <div class="grid g3">${F('Objetivo', SEL(`${p}.tipo`, opts))}${date('inicio', 'Fecha inicial')}${date('fin', 'Fecha final')}</div>
+        ${stageObjetivos(s, i)}
         ${fields}
       </div></section>`;
   }
@@ -2672,7 +2513,7 @@
   function processConfig(a) {
     const st = stagesOf(a), al = stageAlerts(a), N = weekCount(a), c0 = cfgOf(a).inicio, dated = st.some(stageDated);
     return `<div class="pf-block" id="config-proceso">
-      <div class="pf-block-head"><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas y gráficos. Sus fechas arman el calendario del registro diario y del seguimiento semanal.</p></div>
+      <div class="pf-block-head"><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas, objetivos y gráficos. Sus fechas arman el calendario del registro diario y del seguimiento semanal.</p></div>
     ${al.length ? `<div class="callout alert-callout" role="alert"><b>Revisa las fechas de las etapas</b><ul class="alert-list">${al.map((x) => `<li>${x}</li>`).join('')}</ul>
       ${mismatchWeeks(a).length ? '<button class="btn sm mt8" data-action="applyStageDates">Usar las fechas de las etapas en todas las semanas</button>' : ''}</div>` : ''}
     <section class="card${al.length ? ' mt16' : ''}"><div class="card-head"><h3>Calendario del seguimiento</h3><span class="sub">${dated ? 'Se arma con las fechas de las etapas' : 'Define las fechas de una etapa para armarlo'}</span></div>
@@ -2953,6 +2794,10 @@
     .pd-pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#eee;color:#555;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}
     .pd-foot{font-size:10.5px;color:#666;margin:8px 0 0}
+    .pd-stage{margin-bottom:16px;break-inside:avoid}.pd-stage-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border-bottom:1.5px solid #d8b15f;padding-bottom:5px;margin-bottom:6px}
+    .pd-stage-h b{font-size:15px}.pd-stage-h span:last-child{margin-left:auto;font-size:11.5px;color:#333}
+    .pd-stage-n{display:inline-grid;place-items:center;min-width:24px;height:20px;border-radius:4px;background:#111;color:#fff;font-size:10.5px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .pd-stage-meta{display:flex;flex-wrap:wrap;gap:3px 16px;font-size:11px;color:#444;margin-bottom:6px}
     .pd-cal-legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:11.5px;margin-bottom:12px}.pd-cal-legend span{display:inline-flex;align-items:center;gap:6px}
     .pd-cal-legend i{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:3px;font-style:normal;font-size:9px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-cal{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px}
@@ -3029,14 +2874,32 @@
     };
     return { months, counts, grid, label: (ym) => `${CAL_M[+ym.slice(5) - 1]} ${ym.slice(0, 4)}` };
   }
+  // Etapas para el documento: las que tienen objetivo y además fechas u objetivos escritos.
+  function docStages(a) {
+    const dias = (arr) => (arr || []).slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ');
+    return stagesOf(a).map((s, i) => ({ s, n: i + 1, objs: (s.objetivos || []).map((x) => String(x || '').trim()).filter(Boolean) }))
+      .filter((x) => x.s.tipo && (stageDated(x.s) || x.objs.length)).map((x) => {
+        const s = x.s, meta = [];
+        if (stageFull(s)) {
+          if (num(s.objetivo) != null) meta.push(['Objetivo', `${String(+Math.abs(num(s.objetivo)).toFixed(2)).replace('.', ',')} % semanal de ${GAIN_TYPES.includes(s.tipo) ? 'aumento' : 'pérdida'}`]);
+          if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
+          if (num(s.grasaInicial) != null) meta.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
+          if (num(s.pasos) != null) meta.push(['Meta de pasos', fmt(num(s.pasos))]);
+          if ((s.diasEntreno || []).length) meta.push(['Entrenamiento', dias(s.diasEntreno)]);
+          if ((s.diasPeso || []).length) meta.push(['Pesaje', dias(s.diasPeso)]);
+        }
+        return Object.assign(x, { range: stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas', meta });
+      });
+  }
   function planDocBody(a, imgOf, sheets = false) {
     const nl = (s) => esc(s).replace(/\n/g, '<br>');
-    // 1 · Planificación de la etapa: objetivo, fechas y objetivos
-    const pf = planifOf(a), objs = pf.objetivos.map((s) => String(s || '').trim()).filter(Boolean), dur = planifDuration(pf);
-    const kv = (l, v) => `<div><span>${l}</span><b>${v}</b></div>`;
-    const planif = `<div class="pd-kv">${kv('Objetivo de la etapa', String(pf.objetivo || '').trim() ? esc(String(pf.objetivo).trim()) : '—')}${kv('Fecha de inicio', parseISO(pf.inicio) ? fmtDate(pf.inicio) : '—')}${kv('Fecha de término', parseISO(pf.termino) ? fmtDate(pf.termino) : '—')}${dur ? kv('Duración', dur) : ''}</div>
-      <h3 class="pd-sub">Objetivos de la etapa</h3>
-      ${objs.length ? `<ol class="pd-goals">${objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Aún no se han definido objetivos para esta etapa.</p>'}`;
+    // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
+    const ds = docStages(a);
+    const planif = ds.length ? ds.map((x) => `<div class="pd-stage">
+        <div class="pd-stage-h"><span class="pd-stage-n">E${x.n}</span><b>${esc(x.s.tipo)}</b><span>${x.range}</span></div>
+        ${x.meta.length ? `<div class="pd-stage-meta">${x.meta.map(([l, v]) => `<span>${l}: <b>${esc(v)}</b></span>`).join('')}</div>` : ''}
+        ${x.objs.length ? `<ol class="pd-goals">${x.objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Sin objetivos definidos para esta etapa.</p>'}
+      </div>`).join('') : '<p class="pd-empty">Aún no se han definido etapas en Plan › Planificación.</p>';
     // 2 · Calendario de alimentación: los meses con días asignados
     const cd = calDocData(a);
     const calHtml = cd.months.length ? `<div class="pd-cal-legend">${a.dayTypes.filter((dt) => cd.counts[dt.id]).map((dt) => `<span><i style="background:${dayScheme(dt).light}">${esc(dtInitial(dt))}</i>${esc(dt.name)} <b>${cd.counts[dt.id]} ${cd.counts[dt.id] === 1 ? 'día' : 'días'}</b></span>`).join('')}</div>
@@ -3283,15 +3146,14 @@
   async function planPdfDef(a, imgOf) {
     const kit = pdfKit(), { W, str, rule, dayHead, secTitle, lines, th, box, empty } = kit, name = a.q.nombre || 'Atleta';
 
-    // 1 · Planificación de la etapa
-    const pf = planifOf(a), objs = pf.objetivos.map((s) => str(s).trim()).filter(Boolean), dur = planifDuration(pf);
-    const kv = (l, v, extra) => Object.assign({ stack: [{ text: l.toUpperCase(), style: 'eyebrow' }, { text: v, bold: true, fontSize: 10.5, margin: [0, 2, 0, 0] }], margin: [3, 3, 3, 3] }, extra || {});
-    const row2 = [kv('Fecha de inicio', parseISO(pf.inicio) ? fmtDate(pf.inicio) : '—'), kv('Fecha de término', parseISO(pf.termino) ? fmtDate(pf.termino) : '—')].concat(dur ? [kv('Duración', dur)] : []);
-    const planif = [
-      { table: { widths: row2.map(() => '*'), body: [[kv('Objetivo de la etapa', str(pf.objetivo).trim() || '—', { colSpan: row2.length })].concat(row2.slice(1).map(() => ({}))), row2] }, layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#ddd', vLineColor: () => '#ddd' } },
-      { text: 'Objetivos de la etapa', style: 'h3', margin: [0, 12, 0, 5] },
-      objs.length ? { ol: objs.map((o) => ({ text: o, margin: [0, 0, 0, 4] })), margin: [4, 0, 0, 0], fontSize: 9.5 } : empty('Aún no se han definido objetivos para esta etapa.'),
-    ];
+    // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
+    const ds = docStages(a);
+    const planif = ds.length ? ds.map((x) => ({ unbreakable: x.objs.length <= 12, margin: [0, 0, 0, 12], stack: [
+      { table: { widths: [22, 'auto', '*'], body: [[{ text: `E${x.n}`, bold: true, color: '#fff', fillColor: '#111', alignment: 'center', fontSize: 9 }, { text: str(x.s.tipo), bold: true, fontSize: 11 }, { text: x.range, alignment: 'right', color: '#333', fontSize: 9, margin: [0, 1, 0, 0] }]] },
+        layout: { hLineWidth: (k) => (k === 1 ? 1 : 0), vLineWidth: () => 0, hLineColor: () => '#d8b15f', paddingLeft: (k) => (k ? 6 : 3), paddingRight: () => 3, paddingTop: () => 3, paddingBottom: () => 3 } },
+      x.meta.length ? { text: [].concat(...x.meta.map(([l, v]) => [{ text: `${l}: `, color: '#555' }, { text: `${v}      `, bold: true }])), fontSize: 8.5, margin: [0, 5, 0, 2] } : { text: '' },
+      x.objs.length ? { ol: x.objs.map((o) => ({ text: o, margin: [0, 0, 0, 3] })), margin: [4, 5, 0, 0], fontSize: 9.5 } : empty('Sin objetivos definidos para esta etapa.'),
+    ] })) : [empty('Aún no se han definido etapas en Plan › Planificación.')];
 
     // 2 · Calendario de alimentación: los meses con días asignados, de a tres por fila
     const cd = calDocData(a);
@@ -3690,10 +3552,6 @@
       }, 'Copiar');
     },
     // Objetivos de la etapa (pestaña Planificación)
-    // «Etapa» (01) ↔ etapas de la configuración del proceso
-    planifUseStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; p.inicio = m.s.inicio; p.termino = m.s.fin; toast('Fechas tomadas de la configuración del proceso.'); commit(); },
-    planifToStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; m.s.inicio = p.inicio; m.s.fin = p.termino; toast(`Etapa ${m.i + 1} de la configuración del proceso actualizada.`); commit(); },
-    planifAddStage() { const a = A(), p = planifOf(a); stagesOf(a).push(newStage(p.objetivo, { inicio: parseISO(p.inicio) ? p.inicio : '', fin: parseISO(p.termino) ? p.termino : '' })); toast(`Etapa «${p.objetivo}» agregada en la configuración del proceso.`); commit(); },
     // Etapas del proceso (Plan › Planificación › Configuración del proceso)
     addStage(el) {
       const st = stagesOf(A()), ends = st.filter(stageDated).map((x) => x.fin).sort();
@@ -3724,15 +3582,18 @@
       mm.forEach((x) => { delete a.tracking.weeks[x.k].etapa; });
       toast(`${mm.length} ${mm.length === 1 ? 'semana vuelve' : 'semanas vuelven'} a la etapa de sus fechas.`); commit();
     },
-    addObjetivo() {
-      const p = planifOf(A()); p.objetivos.push(''); commit();
-      setTimeout(() => { const el = $(`[data-bind="planif.objetivos.${p.objetivos.length - 1}"]`); el?.scrollIntoView({ block: 'center' }); el?.focus({ preventScroll: true }); }, 0);
+    addObjetivo(el) {
+      const i = +el.dataset.i, s = stagesOf(A())[i]; if (!s) return;
+      if (!Array.isArray(s.objetivos)) s.objetivos = [];
+      s.objetivos.push(''); commit();
+      setTimeout(() => { const t = $(`[data-bind="tracking.config.stages.${i}.objetivos.${s.objetivos.length - 1}"]`); t?.scrollIntoView({ block: 'center' }); t?.focus({ preventScroll: true }); }, 0);
     },
     delObjetivo(el) {
-      const p = planifOf(A()), i = +el.dataset.i, txt = String(p.objetivos[i] || '').trim();
-      const del = () => { p.objetivos.splice(i, 1); closeModal(); commit(); };
+      const s = stagesOf(A())[+el.dataset.i]; if (!s) return;
+      const j = +el.dataset.j, txt = String(s.objetivos[j] || '').trim();
+      const del = () => { s.objetivos.splice(j, 1); closeModal(); commit(); };
       if (!txt) { del(); return; }
-      confirmModal('Eliminar objetivo', `Se eliminará el objetivo ${i + 1}: «${esc(txt.length > 90 ? txt.slice(0, 90) + '…' : txt)}».`, del);
+      confirmModal('Eliminar objetivo', `Se eliminará el objetivo ${j + 1} de «${esc(s.tipo || 'esta etapa')}»: «${esc(txt.length > 90 ? txt.slice(0, 90) + '…' : txt)}».`, del);
     },
     openCal(el) {
       const path = el.dataset.calPath, d = parseISO(getP(path)) || new Date();
@@ -4103,6 +3964,7 @@
     a.portal = Object.assign(newPortal(), isPlain(a.portal) ? a.portal : {});
     a.calendar = isPlain(a.calendar) ? a.calendar : {};
     fixMealNames(a);
+    moveObjetivosToStage(a);
     syncTimeline(a);
     return a;
   }
