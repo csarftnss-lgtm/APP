@@ -101,7 +101,10 @@
   // =====================================================================
   const ETAPAS = ['Pérdida de grasa', 'Mini cut', 'Mantenimiento', 'Ganancia de masa muscular', 'Recomposición', 'Preparación competencia', 'Peak week', 'Post competencia', 'Reverse diet'];
   // Etapas con el formulario completo; las demás quedan «por configurar» (solo objetivo y fechas).
-  const STAGE_FULL = ['Pérdida de grasa', 'Mini cut'];
+  const pctTxt = (v) => String(+Math.abs(+v).toFixed(2)).replace('.', ','); // 1 → «1», 0.75 → «0,75»
+  // Todas las etapas con objetivo tienen el formulario completo. El % semanal se lee según el objetivo:
+  // de pérdida (LOSS_TYPES), de aumento (GAIN_TYPES) o, en el resto, como cambio con signo (− pérdida, 0 mantener, + aumento).
+  const LOSS_TYPES = ['Pérdida de grasa', 'Mini cut', 'Preparación competencia'];
   // Objetivos cuyo % semanal es de aumento de peso (el resto, de pérdida).
   const GAIN_TYPES = ['Ganancia de masa muscular', 'Volumen', 'Reverse diet'];
   const DAY_COLORS = ['#d8b15f', '#5ea8ff', '#4cc38a', '#b58cff', '#ef7a6f', '#f0a33a', '#3fc6c6'];
@@ -181,7 +184,7 @@
       id: uid(), createdAt: todayISO(), q: newQ(nombre),
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
-      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
+      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, signedObj: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
       ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd' }, // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
@@ -265,9 +268,10 @@
   function migrateTracking(t) {
     const base = newAthlete('').tracking;
     t = isPlain(t) ? t : {};
-    const hadStages = isPlain(t.config) && Array.isArray(t.config.stages);
+    const hadStages = isPlain(t.config) && Array.isArray(t.config.stages), signedOk = isPlain(t.config) && !!t.config.signedObj;
     t.config = Object.assign(base.config, isPlain(t.config) ? t.config : {});
     if (!hadStages) { t.weeks = isPlain(t.weeks) ? t.weeks : {}; t.config.stages = stagesFromLegacy(t, null); keepLegacyTargets(t); }
+    if (!signedOk) signStageObjs(t.config);
     t.weeks = isPlain(t.weeks) ? t.weeks : {}; t.daily = isPlain(t.daily) ? t.daily : {};
     return moveWeeklyToDaily(t);
   }
@@ -833,7 +837,8 @@
   // Las fechas de las etapas mandan: arman el calendario del registro diario y del seguimiento semanal,
   // y definen la etapa y el % buscado de cada semana. Una semana marcada a mano con otra etapa genera una alerta.
   const stagesOf = (a) => { const c = cfgOf(a); if (!Array.isArray(c.stages)) c.stages = []; return c.stages; };
-  const stageFull = (s) => !!s && STAGE_FULL.includes(s.tipo);
+  const stageFull = (s) => !!s && !!s.tipo;
+  const stageKind = (s) => (GAIN_TYPES.includes(s && s.tipo) ? 'gain' : LOSS_TYPES.includes(s && s.tipo) ? 'loss' : 'signed');
   const stageDated = (s) => !!(s && s.tipo && parseISO(s.inicio) && parseISO(s.fin) && s.fin >= s.inicio);
   const dow = (d) => (parseISO(d).getDay() + 6) % 7; // 0 = lunes
   const DOW_L = ['L', 'M', 'X', 'J', 'V', 'S', 'D'], DOW_N = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
@@ -856,7 +861,6 @@
   }
   // Objetivo energético de la calculadora que corresponde a cada objetivo de etapa (solo para la migración).
   const STAGE_ENERGY = { 'Pérdida de grasa': 'deficit', 'Mini cut': 'deficit', Mantenimiento: 'mantenimiento', 'Ganancia de masa muscular': 'volumen', Volumen: 'volumen' };
-  const pctTxt = (v) => String(+Math.abs(+v).toFixed(2)).replace('.', ','); // 1 → «1», 0.75 → «0,75»
   const ENERGY_L = { deficit: 'Déficit', mantenimiento: 'Mantenimiento', volumen: 'Volumen' };
   // Lo que la etapa vigente fijaba en la calculadora cuando la bloqueaba (versión anterior): { s, i, objetivo, pct }. Hoy solo lo usa la migración.
   function stageEnergy(a) {
@@ -867,7 +871,27 @@
     return { s: x.s, i: x.i, objetivo: o, pct: pct != null ? Math.abs(pct) : null };
   }
   // % semanal con signo: negativo en etapas de pérdida, positivo en las de ganancia.
-  function stageTarget(s) { const v = num(s && s.objetivo); return v == null ? null : GAIN_TYPES.includes(s.tipo) ? Math.abs(v) : -Math.abs(v); }
+  function stageTarget(s) { const v = num(s && s.objetivo); if (v == null) return null; const k = stageKind(s); return k === 'gain' ? Math.abs(v) : k === 'loss' ? -Math.abs(v) : v; }
+  // Texto del objetivo semanal de una etapa: «1 % semanal de pérdida», «0,25 % semanal de aumento», «mantener el peso»…
+  function stageObjTxt(s) {
+    const v = num(s && s.objetivo); if (v == null) return '';
+    const k = stageKind(s);
+    if (k !== 'signed') return `${pctTxt(v)} % semanal de ${k === 'gain' ? 'aumento' : 'pérdida'}`;
+    return v === 0 ? 'mantener el peso (0 % semanal)' : `${v > 0 ? '+' : '−'}${pctTxt(v)} % semanal (${v > 0 ? 'aumento' : 'pérdida'})`;
+  }
+  // Campo del objetivo semanal según el tipo de etapa: etiqueta, ejemplo y ayuda.
+  const STAGE_OBJ_HINT = {
+    'Pérdida de grasa': 'Del peso corporal. Referencia habitual: 0,5–1 %.', 'Mini cut': 'Del peso corporal. En un mini cut suele ser 0,75–1,25 %.',
+    'Preparación competencia': 'Del peso corporal. Suele ser 0,5–1 %, más conservador al final.',
+    'Ganancia de masa muscular': 'Del peso corporal. Referencia habitual: 0,25–0,5 % (más bajo en atletas avanzados).', Volumen: 'Del peso corporal. Referencia habitual: 0,25–0,5 %.',
+    'Reverse diet': 'Del peso corporal. Lo habitual es un aumento muy lento: 0–0,25 %.',
+  };
+  function stageObjField(s) {
+    const k = stageKind(s);
+    if (k === 'loss') return { label: 'Objetivo de pérdida de grasa', ph: s.tipo === 'Mini cut' ? 'Ej.: 1' : 'Ej.: 0,7', hint: STAGE_OBJ_HINT[s.tipo] };
+    if (k === 'gain') return { label: 'Objetivo de aumento de peso', ph: 'Ej.: 0,25', hint: STAGE_OBJ_HINT[s.tipo] || 'Del peso corporal.' };
+    return { label: 'Cambio de peso semanal buscado', ph: '0', hint: 'Del peso corporal. Negativo = pérdida · 0 = mantener · positivo = aumento.' };
+  }
   function weekEtapa(a, k) {
     const own = wk(a, k).etapa; if (own) return own;
     const s = stageOfWeek(a, k); if (s) return s.tipo;
@@ -943,6 +967,12 @@
     pf.movedToStages = true;
   }
 
+  // Antes, el % de las etapas de mantenimiento, recomposición, peak week y post competencia se leía siempre como pérdida.
+  // Ahora se guarda con signo: los valores anteriores pasan a negativo, para que sigan significando lo mismo (una sola vez).
+  function signStageObjs(c) {
+    (Array.isArray(c.stages) ? c.stages : []).forEach((x) => { const v = num(x.objetivo); if (v != null && x.tipo && stageKind(x) === 'signed') x.objetivo = -Math.abs(v); });
+    c.signedObj = true;
+  }
   const roundReq = (t) => ({ kcal: Math.round(t.kcal), p: Math.round(t.p), c: Math.round(t.c), g: Math.round(t.g) });
   // Una sola vez, para atletas anteriores a «requerimientos por etapa»: la etapa vigente recibe lo que daba la calculadora,
   // para que el menú, el documento y el seguimiento no queden sin metas. Las demás etapas parten vacías.
@@ -2703,12 +2733,11 @@
     const pill = !s.tipo ? '<span class="pill">No se usa</span>'
       : stt === 'now' ? '<span class="pill ok">En curso</span>' : stt === 'next' ? `<span class="pill${isCur ? ' gold' : ''}">Próxima</span>` : stt === 'done' ? '<span class="pill">Terminada</span>' : '<span class="pill warn">Sin fechas</span>';
     const nObj = (s.objetivos || []).filter((x) => String(x || '').trim()).length;
-    const brief = !s.tipo ? '' : [stageFull(s) && num(s.objetivo) != null ? `${pctTxt(num(s.objetivo))} % / sem` : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`, stageHasReqs(a, s) ? 'con requerimientos' : 'sin requerimientos'].filter(Boolean).join(' · ');
+    const brief = !s.tipo ? '' : [num(s.objetivo) != null ? stageObjTxt(s) : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`, stageHasReqs(a, s) ? 'con requerimientos' : 'sin requerimientos'].filter(Boolean).join(' · ');
     const date = (k, label) => `<div class="field"><label for="st-${s.id}-${k}">${label}</label>${D(`${p}.${k}`, `st-${s.id}-${k}`)}</div>`;
     const sub = !s.tipo ? 'Elige un objetivo para usar esta etapa' : stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas: aún no se refleja en el registro';
     let fields = '';
     if (!s.tipo) fields = '<div class="callout small mt16"><b>Etapa sin determinar.</b> No se usa en ninguna parte del proceso (calendario, registro, seguimiento, requerimientos ni documento), aunque tenga fechas. Elige un objetivo cuando quieras activarla.</div>';
-    else if (!full) fields = '<div class="callout small mt16">Por configurar: los campos de esta etapa se definirán más adelante. Sus fechas ya se usan en el registro diario y el seguimiento semanal.</div>';
     else {
       const dly = a.tracking.daily || {}, w1 = stageDated(s) ? Object.keys(dly).filter((d) => d >= s.inicio && d < addDays(s.inicio, 7)).map((d) => num(dly[d].peso)).filter((v) => v != null) : [];
       const auto = w1.length ? mean(w1) : eff(a).peso, autoTxt = w1.length ? 'promedio de los pesajes de su 1.ª semana' : 'peso de Requerimientos';
@@ -2718,7 +2747,7 @@
           ${F('Peso inicial', suffix(I(`${p}.pesoInicial`, { num: true, live: true, ph: auto != null ? fmt(auto, 1) : '—' }), 'kg'), auto != null ? `Vacío: se usa el ${autoTxt}.` : 'Se usa para la trayectoria objetivo.')}
           ${F('% de grasa inicial', suffix(I(`${p}.grasaInicial`, { num: true, ph: 'Si corresponde' }), '%'), 'Opcional.')}
           ${F('Meta de pasos diarios', I(`${p}.pasos`, { num: true, ph: 'Ej.: 10000' }), 'Se muestra en el panel de la semana.')}
-          ${F('Objetivo de pérdida de grasa', suffix(I(`${p}.objetivo`, { num: true, live: true, ph: s.tipo === 'Mini cut' ? 'Ej.: 1' : 'Ej.: 0,7' }), '% / sem'), s.tipo === 'Mini cut' ? 'Del peso corporal. En un mini cut suele ser 0,75–1,25 %.' : 'Del peso corporal. Referencia habitual: 0,5–1 %.')}
+          ${(() => { const of = stageObjField(s); return F(of.label, suffix(I(`${p}.objetivo`, { num: true, live: true, ph: of.ph }), '% / sem'), of.hint); })()}
         </div>
         <div class="grid g2 mt16">
           <div class="field"><label>Días de entrenamiento</label>${dayPicker(i, 'diasEntreno', s)}<div class="hint">${nE ? `${nE} ${nE === 1 ? 'día' : 'días'} por semana.` : 'Toca los días que entrena.'} Se marcan en el registro diario.</div></div>
@@ -2760,7 +2789,7 @@
       <ul class="alert-list">
         <li><b>Fechas:</b> arman el calendario del registro diario y del seguimiento semanal, y dicen a qué etapa pertenece cada semana.</li>
         <li><b>Requerimientos de la etapa:</b> los de la etapa vigente son las metas de calorías y macros del menú diario, la distribución, el documento y el plan del cliente; los de cada etapa, los macros de sus semanas en el seguimiento semanal. Se anotan a mano o se traen de la calculadora (Plan › Requerimientos), que no se aplica sola.</li>
-        <li><b>Objetivo de pérdida (% semanal):</b> es el % buscado de cada semana de la etapa.</li>
+        <li><b>Objetivo semanal (% del peso):</b> es el % buscado de cada semana de la etapa: de pérdida en pérdida de grasa, mini cut y preparación; de aumento en ganancia de masa muscular y reverse diet; con signo en mantenimiento y las demás (0 = mantener).</li>
         <li><b>Días de entrenamiento:</b> definen el tipo de día (entrenamiento o descanso) del calendario de alimentación y las comidas de «Hambre» del registro diario.</li>
         <li><b>Días de reporte de peso y meta de pasos:</b> son las metas que muestran el panel y el registro diario.</li>
         <li><b>Peso inicial:</b> punto de partida de la trayectoria objetivo y del seguimiento.</li>
@@ -3124,7 +3153,7 @@
         const s = x.s, meta = [];
         (a.dayTypes || []).forEach((dt) => { const t = stageTargets(a, s, dt); if (t.ok) meta.push([`Requerimientos · ${dt.name}`, calcLine(t)]); });
         if (stageFull(s)) {
-          if (num(s.objetivo) != null) meta.push(['Objetivo', `${pctTxt(num(s.objetivo))} % semanal de ${GAIN_TYPES.includes(s.tipo) ? 'aumento' : 'pérdida'}`]);
+          if (num(s.objetivo) != null) meta.push(['Objetivo', stageObjTxt(s)]);
           if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
           if (num(s.grasaInicial) != null) meta.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
           if (num(s.pasos) != null) meta.push(['Meta de pasos', fmt(num(s.pasos))]);
@@ -4223,6 +4252,7 @@
     const base = newAthlete('');
     a.q = Object.assign(base.q, a.q || {}); a.req = Object.assign(base.req, a.req || {});
     const reqsSeeded = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.reqsSeeded);
+    const signedOk = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.signedObj);
     const hadStages = !!(a.tracking && isPlain(a.tracking.config) && Array.isArray(a.tracking.config.stages));
     a.tracking = a.tracking || base.tracking; a.tracking.config = Object.assign(base.tracking.config, a.tracking.config || {});
     a.tracking.weeks = a.tracking.weeks || {}; a.tracking.daily = a.tracking.daily || {};
@@ -4236,6 +4266,7 @@
     fixMealNames(a);
     moveObjetivosToStage(a);
     if (!reqsSeeded) seedStageReqs(a); else a.tracking.config.stages.forEach((x) => { if (!isPlain(x.reqs)) x.reqs = {}; });
+    if (!signedOk) signStageObjs(a.tracking.config);
     syncTimeline(a);
     return a;
   }
