@@ -182,6 +182,7 @@
       dayTypes: dts, activeDay: dts[0].id,
       tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
       ui: { trackTab: 'panel', panelWeek: null, chartMetric: 'abd' },
+      calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
     };
   }
@@ -367,7 +368,8 @@
         })),
       };
     });
-    return { nombre: a.q.nombre || '', dayTypes, foods: [...used.values()].map((f) => Object.assign({}, f)), updatedAt: new Date().toISOString() };
+    const cal = Object.fromEntries(Object.entries(a.calendar || {}).filter(([, id]) => a.dayTypes.some((d) => d.id === id)).sort(([x], [y]) => (x < y ? -1 : 1)));
+    return { nombre: a.q.nombre || '', dayTypes, ...(Object.keys(cal).length ? { calendar: cal } : {}), foods: [...used.values()].map((f) => Object.assign({}, f)), updatedAt: new Date().toISOString() };
   }
   async function publishPlan(a) {
     const u = linkedUid(a); if (!u) return;
@@ -480,6 +482,7 @@
     a.q.nombre = p.nombre || a.q.nombre;
     a.dayTypes = Array.isArray(p.dayTypes) && p.dayTypes.length ? p.dayTypes : a.dayTypes;
     a.activeDay = a.dayTypes.some((d) => d.id === prevDay) ? prevDay : a.dayTypes[0].id;
+    a.calendar = isPlain(p.calendar) ? p.calendar : {};
     S.foods = Array.isArray(p.foods) ? p.foods : []; dlVersion = -1;
     scheduleRender();
   }
@@ -1961,12 +1964,59 @@
   }
 
   // ---------------- Menú diario ----------------
+  // ---------------- Calendario de alimentación (Menú diario) ----------------
+  // Qué tipo de día de la minuta toca cada fecha. a.calendar = { 'aaaa-mm-dd': id del tipo de día }.
+  const calOf = (a) => { if (!isPlain(a.calendar)) a.calendar = {}; return a.calendar; };
+  const calType = (a, d) => { const id = a && a.calendar && a.calendar[d]; return id ? (a.dayTypes || []).find((x) => x.id === id) || null : null; };
+  const dtInitial = (dt) => (String((dt && dt.name) || '?').trim()[0] || '?').toUpperCase();
+  // Tipo de día de entrenamiento y de descanso (por nombre; si no, el 1.º y el 2.º).
+  function trainRest(a) {
+    const dts = a.dayTypes || [];
+    const train = dts.find((x) => /entren/i.test(x.name || '')) || dts[0];
+    const rest = dts.find((x) => /descans/i.test(x.name || '')) || dts.find((x) => x !== train) || train;
+    return { train, rest };
+  }
+  let fcFolded = lsGet('prepcoach-calfold') === '1';
+  const fcYear = () => T.fcYear || new Date().getFullYear();
+  const fcBrushOf = (a) => (T.fcBrush === 'clear' ? 'clear' : a.dayTypes.some((x) => x.id === T.fcBrush) ? T.fcBrush : a.dayTypes[0].id);
+  function fcDayBtn(a, iso, today) {
+    const dt = calType(a, iso), dn = +iso.slice(8);
+    const lab = `${DAYS[parseISO(iso).getDay()]} ${fmtDate(iso)}${dt ? ' · ' + dt.name : ' · sin asignar'}`;
+    return `<button type="button" class="fc-day${dt ? ' on' : ''}${iso === today ? ' today' : ''}" data-fc="${iso}"${dt ? ` style="--dc:${esc(dt.color || 'var(--accent)')}"` : ''} title="${esc(lab)}" aria-label="${esc(lab)}">${dn}${dt ? `<i>${esc(dtInitial(dt))}</i>` : ''}</button>`;
+  }
+  function feedCalendar(a) {
+    const y = fcYear(), cal = calOf(a), today = todayISO(), brush = fcBrushOf(a);
+    const counts = {}; Object.keys(cal).forEach((d) => { if (d.startsWith(`${y}-`) && calType(a, d)) counts[cal[d]] = (counts[cal[d]] || 0) + 1; });
+    const total = Object.values(counts).reduce((x, n) => x + n, 0);
+    const bBtn = (id, label, sw, n) => `<button type="button" class="fc-brush${brush === id ? ' on' : ''}" data-action="fcBrush" data-id="${esc(id)}" aria-pressed="${brush === id}">${sw}${esc(label)}${n != null ? `<small>${n}</small>` : ''}</button>`;
+    const brushes = a.dayTypes.map((dt) => bBtn(dt.id, dt.name, `<span class="sw" style="--dc:${esc(dt.color || 'var(--accent)')}">${esc(dtInitial(dt))}</span>`, counts[dt.id] || 0)).join('')
+      + bBtn('clear', 'Quitar', '<span class="sw clear"></span>')
+      + (a.dayTypes.length < 3 ? `<button type="button" class="fc-brush add" data-action="addDayType">${ic('plus', 13)} Tercer tipo de día</button>` : '');
+    const months = CAL_M.map((mn, m) => {
+      const lead = (new Date(y, m, 1, 12).getDay() + 6) % 7, nd = new Date(y, m + 1, 0).getDate();
+      let cells = '<span class="fc-blank"></span>'.repeat(lead);
+      for (let d = 1; d <= nd; d++) cells += fcDayBtn(a, `${y}-${pad(m + 1)}-${pad(d)}`, today);
+      return `<div class="fc-month"><div class="fc-mname">${mn}</div><div class="fc-grid">${DOW_L.map((l) => `<span class="fc-dow">${l}</span>`).join('')}${cells}</div></div>`;
+    }).join('');
+    return `<section class="card fc-card no-print" id="feed-cal" aria-label="Calendario de alimentación">
+      <div class="card-head"><h3>Calendario de alimentación</h3><span class="sub">${total ? `${total} ${total === 1 ? 'día asignado' : 'días asignados'} en ${y}` : 'Asigna a cada día su tipo de alimentación'}</span><span class="spacer"></span>
+        <div class="fc-yr"><button type="button" class="btn sm ghost icon" data-action="fcYear" data-d="-1" aria-label="Año anterior">${ic('chevL', 15)}</button><b>${y}</b><button type="button" class="btn sm ghost icon" data-action="fcYear" data-d="1" aria-label="Año siguiente">${ic('chevR', 15)}</button></div>
+        <button type="button" class="btn sm ghost" data-action="fcFold" aria-expanded="${!fcFolded}">${ic(fcFolded ? 'arrowDown' : 'arrowUp', 14)} ${fcFolded ? 'Mostrar' : 'Ocultar'}</button></div>
+      ${fcFolded ? '' : `<div class="card-body">
+        <div class="fc-tools"><div class="fc-brushes" role="group" aria-label="Tipo de día a aplicar">${brushes}</div>
+          <div class="fc-quick"><button type="button" class="btn sm" data-action="fcFill" title="Llena los días sin asignar de cada etapa con sus días de entrenamiento (Seguimiento › Configuración)">${ic('cal', 14)} Completar con Configuración</button>
+            <button type="button" class="btn sm ghost danger" data-action="fcClear" ${total ? '' : 'disabled'}>Vaciar ${y}</button></div></div>
+        <div class="hint mt8">Elige un tipo de día y toca los días (o arrastra sobre varios). Tocar un día que ya tiene ese tipo lo deja sin asignar. El calendario sale en el documento que se descarga y define las comidas de «Hambre» en el registro diario.</div>
+        <div class="fc-year mt16">${months}</div>
+      </div>`}
+    </section>`;
+  }
   function viewMenu() {
     const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
     const SHORT = { Kcal: 'Kcal', 'Proteínas': 'P', Carbohidratos: 'C', Grasas: 'G' };
     const sumItem = (l, v, tv, u, cls) => { const p = adq(v, tv); return `<div class="sum-item"><div class="si-top"><span class="si-l"><span class="si-full">${l}</span><span class="si-short">${SHORT[l] || l}</span></span><span class="adq ${adqCls(p)}">${p != null ? fmt(p) + '%' : ''}</span></div>
       <div class="si-v"><span class="${cls}">${fmt(v)}</span> <small>/ ${fmt(tv)} ${u}</small></div><div class="progress" style="--c:var(${cls === 'kc' ? '--c-kcal' : cls === 'kp' ? '--c-p' : cls === 'kcarb' ? '--c-c' : '--c-g'})"><span style="width:${clamp(p || 0, 0, 100)}%"></span></div></div>`; };
-    return `
+    return `${feedCalendar(a)}
     ${daySeg(a, `${dt.meals.length && dt.meals.every((m) => collapsed.has(m.id))
       ? `<button class="btn sm ghost" data-action="expandAll">${ic('arrowDown', 14)} Expandir todas</button>`
       : `<button class="btn sm ghost" data-action="collapseAll">${ic('arrowUp', 14)} Contraer todas</button>`}`)}
@@ -2201,12 +2251,12 @@
       ${isClientView() ? '' : `<div class="mt8"><button class="btn sm" data-action="applyStageDates">Usar las fechas de Configuración</button></div>`}</div>`;
   }
 
-  // Tipo de día de la minuta (Entrenamiento / Descanso) que corresponde a una fecha: lo anotado en «Entreno»
-  // (sí / no) y, si no se anotó, los días de entrenamiento de la etapa en Configuración. null si no se sabe.
+  // Tipo de día de la minuta que corresponde a una fecha: el del calendario de alimentación (Menú diario); si no está,
+  // lo anotado en «Entreno» (sí / no); si tampoco, los días de entrenamiento de la etapa en Configuración. null si no se sabe.
   function dayTypeFor(a, d) {
     const dts = a.dayTypes || []; if (!dts.length) return null;
-    const train = dts.find((x) => /entren/i.test(x.name || '')) || dts[0];
-    const rest = dts.find((x) => /descans/i.test(x.name || '')) || dts.find((x) => x !== train) || train;
+    const cd = calType(a, d); if (cd) return { dt: cd, src: 'Según el calendario de alimentación (Plan › Menú diario)' };
+    const { train, rest } = trainRest(a);
     const e = dailyOf(a, d).entreno;
     if (e === 'si' || e === 'no') return { dt: e === 'si' ? train : rest, src: 'Según lo anotado en «Entreno»' };
     const s = stageOfDay(a, d);
@@ -2774,7 +2824,7 @@
     const a = A(), dl = MODE === 'sync';
     return `
     <div class="daytype-head no-print">
-      <ol class="mn-order" aria-label="Contenido del archivo, en orden"><li>Planificación</li><li>Minuta ejemplo de cada tipo de día</li><li>Distribución de las comidas</li><li>Resumen del seguimiento semanal</li></ol>
+      <ol class="mn-order" aria-label="Contenido del archivo, en orden"><li>Planificación</li><li>Calendario de alimentación</li><li>Minuta ejemplo de cada tipo de día</li><li>Distribución de las comidas</li><li>Resumen del seguimiento semanal</li></ol>
       <span class="spacer"></span>
       <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
@@ -2823,7 +2873,13 @@
     .pd-scroll{overflow-x:auto}.pd-wk{min-width:600px;font-size:10px}.pd-wk th,.pd-wk td{padding:3px 4px}.pd-wk th{vertical-align:bottom}.pd-wk td{white-space:nowrap}.pd-wk th:nth-child(3),.pd-wk td:nth-child(3){text-align:left}
     .pd-pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#eee;color:#555;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}
-    .pd-foot{font-size:10.5px;color:#666;margin:8px 0 0}`;
+    .pd-foot{font-size:10.5px;color:#666;margin:8px 0 0}
+    .pd-cal-legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:11.5px;margin-bottom:12px}.pd-cal-legend span{display:inline-flex;align-items:center;gap:6px}
+    .pd-cal-legend i{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:3px;font-style:normal;font-size:9px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .pd-cal{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px}
+    .pd-cal-m{table-layout:fixed;font-size:10px;break-inside:avoid}.pd-cal-m th,.pd-cal-m td{text-align:center!important;padding:2px 1px;border:1px solid #e3e3e3}
+    .pd-cal-m thead tr:first-child th{font-size:11.5px;background:#fff;border:0;padding-bottom:4px}.pd-cal-m thead tr:last-child th{font-size:9px;color:#666;background:#f6f6f6}
+    .pd-cal-m td.on{font-weight:600;-webkit-print-color-adjust:exact;print-color-adjust:exact}.pd-cal-m td i{font-style:normal;font-size:7.5px;font-weight:700;margin-left:2px}`;
   const MINUTA_CSS = `body{margin:24px;${MINUTA_BASE}}
     ${MINUTA_RULES}`;
   // Vista previa dentro de la app: las mismas reglas del archivo, limitadas a la hoja .mn-paper para que no afecten al resto.
@@ -2881,6 +2937,19 @@
   }
 
   // ---- Planificación completa: 1) planificación de la etapa, 2) minuta ejemplo de cada tipo de día, 3) distribución de comidas, 4) resumen del seguimiento semanal ----
+  // Meses del calendario de alimentación que tienen al menos un día asignado ('aaaa-mm'), y días por tipo en ellos.
+  function calDocData(a) {
+    const days = Object.keys(a.calendar || {}).filter((d) => calType(a, d)).sort();
+    const months = [...new Set(days.map((d) => d.slice(0, 7)))];
+    const counts = {}; days.forEach((d) => { const id = a.calendar[d]; counts[id] = (counts[id] || 0) + 1; });
+    const grid = (ym) => { // semanas del mes (lunes a domingo) con la fecha ISO o null
+      const [y, m] = ym.split('-').map(Number), lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate();
+      const cells = Array(lead).fill(null).concat(Array.from({ length: nd }, (_, i) => `${ym}-${pad(i + 1)}`));
+      while (cells.length % 7) cells.push(null);
+      return Array.from({ length: cells.length / 7 }, (_, w) => cells.slice(w * 7, w * 7 + 7));
+    };
+    return { months, counts, grid, label: (ym) => `${CAL_M[+ym.slice(5) - 1]} ${ym.slice(0, 4)}` };
+  }
   function planDocBody(a, imgOf, sheets = false) {
     const nl = (s) => esc(s).replace(/\n/g, '<br>');
     // 1 · Planificación de la etapa: objetivo, fechas y objetivos
@@ -2889,14 +2958,20 @@
     const planif = `<div class="pd-kv">${kv('Objetivo de la etapa', String(pf.objetivo || '').trim() ? esc(String(pf.objetivo).trim()) : '—')}${kv('Fecha de inicio', parseISO(pf.inicio) ? fmtDate(pf.inicio) : '—')}${kv('Fecha de término', parseISO(pf.termino) ? fmtDate(pf.termino) : '—')}${dur ? kv('Duración', dur) : ''}</div>
       <h3 class="pd-sub">Objetivos de la etapa</h3>
       ${objs.length ? `<ol class="pd-goals">${objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Aún no se han definido objetivos para esta etapa.</p>'}`;
-    // 2 · Minuta ejemplo de cada tipo de día
+    // 2 · Calendario de alimentación: los meses con días asignados
+    const cd = calDocData(a);
+    const calHtml = cd.months.length ? `<div class="pd-cal-legend">${a.dayTypes.filter((dt) => cd.counts[dt.id]).map((dt) => `<span><i style="background:${dayScheme(dt).light}">${esc(dtInitial(dt))}</i>${esc(dt.name)} <b>${cd.counts[dt.id]} ${cd.counts[dt.id] === 1 ? 'día' : 'días'}</b></span>`).join('')}</div>
+      <div class="pd-cal">${cd.months.map((ym) => `<table class="pd-cal-m"><thead><tr><th colspan="7">${cd.label(ym)}</th></tr><tr>${DOW_L.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
+        ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = calType(a, d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
+      : '<p class="pd-empty">Aún no se han asignado días en el calendario de alimentación del Menú diario.</p>';
+    // 3 · Minuta ejemplo de cada tipo de día
     const minutas = a.dayTypes.map((dt, i) => {
       const pm = minutaMeals(dt);
       return `<div class="pd-day${i ? ' pd-break' : ''}">${pm.length
         ? minutaBody(a, dt, pm, imgOf, { eyebrow: 'Minuta ejemplo', title: dt.name })
         : `<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div></div><p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>`}</div>`;
     }).join('');
-    // 3 · Distribución de comidas: horario e indicaciones de cada comida, por tipo de día
+    // 4 · Distribución de comidas: horario e indicaciones de cada comida, por tipo de día
     const dist = a.dayTypes.map((dt) => {
       const t = dayTargets(a, dt);
       return `<div class="pd-day"><div class="pm-head"><div><div class="pm-eyebrow">Distribución de comidas</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
@@ -2907,7 +2982,7 @@
     }).join('');
     const noteOf = (k) => String((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
     const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).map(([k, l]) => `<div class="pd-note"><b>${l}.</b> ${nl(noteOf(k))}</div>`).join('');
-    // 4 · Resumen del seguimiento semanal: desde la semana inicial hasta la actual
+    // 5 · Resumen del seguimiento semanal: desde la semana inicial hasta la actual
     const cw = currentWeek(a), cfg = cfgOf(a), ks = Array.from({ length: cw + 1 }, (_, k) => k);
     const withAvg = ks.filter((k) => weekAvg(a, k) != null), any = withAvg.some((k) => weekWeights(a, k).length) || ks.some((k) => weekSteps(a, k) != null || SCALES.some(([f]) => weekField(a, k, f).avg != null));
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
@@ -2930,21 +3005,22 @@
       const sheet = (html) => `<div class="mn-paper mn-sheet">${html}</div>`;
       const land = a.dayTypes.map((dt, i) => {
         const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
-        const head = `${i ? '' : '<div class="pd-sec-title"><span>2</span>Minuta ejemplo</div>'}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
+        const head = `${i ? '' : '<div class="pd-sec-title"><span>3</span>Minuta ejemplo</div>'}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
           ${pm.length ? `<div class="pm-targets">Objetivo: <b>${fmt(t.kcal)} kcal</b> · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
         const body = pm.length ? minutaGridHTML(dt, pm, imgOf) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
         return `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`;
       }).join('');
       return sheet(`<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
-        <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>${sec(1, 'Planificación', planif, false)}`)
-        + land + sheet(sec(3, 'Distribución de las comidas', dist + notes, false)) + sheet(sec(4, 'Resumen del seguimiento semanal', seg, false));
+        <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>${sec(1, 'Planificación', planif, false)}`) + sheet(sec(2, 'Calendario de alimentación', calHtml, false))
+        + land + sheet(sec(4, 'Distribución de las comidas', dist + notes, false)) + sheet(sec(5, 'Resumen del seguimiento semanal', seg, false));
     }
     return `<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
         <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>
       ${sec(1, 'Planificación', planif, false)}
-      ${sec(2, 'Minuta ejemplo', minutas)}
-      ${sec(3, 'Distribución de las comidas', dist + notes)}
-      ${sec(4, 'Resumen del seguimiento semanal', seg)}`;
+      ${sec(2, 'Calendario de alimentación', calHtml)}
+      ${sec(3, 'Minuta ejemplo', minutas)}
+      ${sec(4, 'Distribución de las comidas', dist + notes)}
+      ${sec(5, 'Resumen del seguimiento semanal', seg)}`;
   }
   // Minuta horizontal en HTML para la vista previa: misma estructura que el PDF (fila por comida, columna por opción).
   function minutaGridHTML(dt, pm, imgOf) {
@@ -3138,7 +3214,26 @@
       objs.length ? { ol: objs.map((o) => ({ text: o, margin: [0, 0, 0, 4] })), margin: [4, 0, 0, 0], fontSize: 9.5 } : empty('Aún no se han definido objetivos para esta etapa.'),
     ];
 
-    // 2 · Minuta ejemplo de cada tipo de día
+    // 2 · Calendario de alimentación: los meses con días asignados, de a tres por fila
+    const cd = calDocData(a);
+    const calMonth = (ym) => ({ table: { widths: Array(7).fill('*'), body: [
+        [{ text: cd.label(ym), colSpan: 7, bold: true, fontSize: 9, alignment: 'center', margin: [0, 1, 0, 2] }, {}, {}, {}, {}, {}, {}],
+        DOW_L.map((l) => ({ text: l, fontSize: 6.5, bold: true, color: '#666', alignment: 'center' })),
+      ].concat(cd.grid(ym).map((w) => w.map((d) => { if (!d) return { text: '' }; const dt = calType(a, d);
+        return dt ? { text: [{ text: String(+d.slice(8)) }, { text: ' ' + dtInitial(dt), fontSize: 5.5, bold: true }], fillColor: dayScheme(dt).light, alignment: 'center' } : { text: String(+d.slice(8)), color: '#555', alignment: 'center' }; }))) },
+      layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#ddd', vLineColor: () => '#ddd', paddingLeft: () => 1, paddingRight: () => 1, paddingTop: () => 2, paddingBottom: () => 2 }, fontSize: 7.5 });
+    const calPdf = [];
+    if (cd.months.length) {
+      const used = a.dayTypes.filter((dt) => cd.counts[dt.id]);
+      calPdf.push({ table: { widths: used.flatMap(() => [12, 'auto']), body: [used.flatMap((dt) => [{ text: dtInitial(dt), fillColor: dayScheme(dt).light, bold: true, fontSize: 7, alignment: 'center' }, { text: `${str(dt.name)} · ${cd.counts[dt.id]} ${cd.counts[dt.id] === 1 ? 'día' : 'días'}`, fontSize: 8.5, margin: [2, 0, 10, 0] }])] }, layout: 'noBorders', margin: [0, 0, 0, 10] });
+      for (let i = 0; i < cd.months.length; i += 3) {
+        const row = cd.months.slice(i, i + 3).map((ym) => Object.assign({ width: '*' }, calMonth(ym)));
+        while (row.length < 3) row.push({ width: '*', text: '' });
+        calPdf.push({ columns: row, columnGap: 12, margin: [0, 0, 0, 12], unbreakable: true });
+      }
+    } else calPdf.push(empty('Aún no se han asignado días en el calendario de alimentación del Menú diario.'));
+
+    // 3 · Minuta ejemplo de cada tipo de día
     const minutas = [];
     for (let di = 0; di < a.dayTypes.length; di++) {
       const dt = a.dayTypes[di];
@@ -3151,12 +3246,12 @@
       if (!pm.length) { minutas.push(empty('Este tipo de día aún no tiene opciones con alimentos en el Menú diario.')); continue; }
       const data = minutaGridData(kit, pm, imgOf);
       // Para medir, la hoja se arma igual que en el documento (la primera minuta lleva además el título de la sección).
-      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(2, 'Minuta ejemplo', true); delete st.pageBreak; return [st].concat(h); };
+      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(3, 'Minuta ejemplo', true); delete st.pageBreak; return [st].concat(h); };
       const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => testHead().concat(pdfMinutaGrid(kit, dt, data, f, h)));
       minutas.push(...pdfMinutaGrid(kit, dt, data, fs, ih));
     }
 
-    // 3 · Distribución de las comidas
+    // 4 · Distribución de las comidas
     const dist = [];
     a.dayTypes.forEach((dt) => {
       const t = dayTargets(a, dt);
@@ -3167,7 +3262,7 @@
     const noteOf = (k) => str((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
     [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).forEach(([k, l]) => dist.push(Object.assign(box({ text: [{ text: l + '. ', bold: true }, noteOf(k)], fontSize: 8.5 }, 0), { margin: [0, 0, 0, 6], unbreakable: true })));
 
-    // 4 · Resumen del seguimiento semanal
+    // 5 · Resumen del seguimiento semanal
     const cw = currentWeek(a), cfg = cfgOf(a), ks = Array.from({ length: cw + 1 }, (_, k) => k);
     const withAvg = ks.filter((k) => weekAvg(a, k) != null), any = withAvg.some((k) => weekWeights(a, k).length) || ks.some((k) => weekSteps(a, k) != null || SCALES.some(([f]) => weekField(a, k, f).avg != null));
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
@@ -3188,9 +3283,10 @@
     return pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, [].concat(
         [{ columns: [{ width: '*', stack: [{ text: 'PLANIFICACIÓN NUTRICIONAL', style: 'eyebrow' }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] }, { width: 'auto', text: `Generada el ${fmtDate(todayISO())}\n${a.dayTypes.map((d) => str(d.name)).join(' · ')}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 }, rule(2, '#111', 6, 0)],
         [secTitle(1, 'Planificación', false)], planif,
-        [Object.assign(secTitle(2, 'Minuta ejemplo', true), { pageOrientation: 'landscape' })], minutas,
-        [Object.assign(secTitle(3, 'Distribución de las comidas', true), { pageOrientation: 'portrait' })], dist,
-        [secTitle(4, 'Resumen del seguimiento semanal', true)], seg
+        [secTitle(2, 'Calendario de alimentación', true)], calPdf,
+        [Object.assign(secTitle(3, 'Minuta ejemplo', true), { pageOrientation: 'landscape' })], minutas,
+        [Object.assign(secTitle(4, 'Distribución de las comidas', true), { pageOrientation: 'portrait' })], dist,
+        [secTitle(5, 'Resumen del seguimiento semanal', true)], seg
     ));
   }
   // Genera un PDF y lo entrega. Si no se puede generar (sin conexión o generador bloqueado), entrega la versión HTML con fallback().
@@ -3415,6 +3511,23 @@
     },
 
     setDay(el) { A().activeDay = el.dataset.id; commit(); },
+    // Calendario de alimentación (Menú diario)
+    fcYear(el) { T.fcYear = fcYear() + (+el.dataset.d || 0); render(); },
+    fcBrush(el) { T.fcBrush = el.dataset.id; render(); },
+    fcFold() { fcFolded = !fcFolded; lsSet('prepcoach-calfold', fcFolded ? '1' : '0'); render(); },
+    fcFill() {
+      const a = A(), cal = calOf(a), { train, rest } = trainRest(a);
+      const st = stagesOf(a).filter((s) => stageDated(s) && (s.diasEntreno || []).length);
+      if (!st.length) { toast('Primero marca los días de entrenamiento de la etapa en Seguimiento › Configuración.'); return; }
+      let n = 0;
+      st.forEach((s) => { for (let d = s.inicio; d <= s.fin; d = addDays(d, 1)) if (!calType(a, d)) { cal[d] = s.diasEntreno.includes(dow(d)) ? train.id : rest.id; n++; } });
+      toast(n ? `${n} ${n === 1 ? 'día asignado' : 'días asignados'} según los días de entrenamiento de las etapas.` : 'No había días sin asignar dentro de las etapas.');
+      commit();
+    },
+    fcClear() {
+      const a = A(), y = fcYear(), cal = calOf(a), ks = Object.keys(cal).filter((d) => d.startsWith(`${y}-`));
+      confirmModal('Vaciar calendario', `Se quitará el tipo de día de los <b>${ks.length}</b> días asignados en ${y}.`, () => { ks.forEach((d) => { delete cal[d]; }); closeModal(); commit(); }, 'Vaciar');
+    },
     addDayType() {
       promptModal('Nuevo tipo de día', `${F('Nombre', '<input class="input" id="m-name" placeholder="Ej.: Recarga, Día alto, Competencia">')}
         ${F('Copiar comidas desde', `<select class="select" id="m-copy"><option value="">Comidas por defecto</option>${A().dayTypes.map((d) => `<option value="${d.id}">${esc(d.name)}</option>`).join('')}</select>`)}`, () => {
@@ -3441,7 +3554,9 @@
     delDayType(el) {
       const a = A(); const dt = a.dayTypes.find((d) => d.id === el.dataset.id);
       confirmModal('Eliminar tipo de día', `Se eliminará <b>${esc(dt.name)}</b> con sus comidas y menú.`, () => {
-        a.dayTypes = a.dayTypes.filter((d) => d.id !== dt.id); a.activeDay = a.dayTypes[0].id; closeModal(); commit();
+        a.dayTypes = a.dayTypes.filter((d) => d.id !== dt.id); a.activeDay = a.dayTypes[0].id;
+        const cal = calOf(a); Object.keys(cal).forEach((d) => { if (cal[d] === dt.id) delete cal[d]; });
+        closeModal(); commit();
       });
     },
     addMeal() {
@@ -3808,6 +3923,34 @@
     if (CAL && !ev.target.closest('#cal-pop') && !ev.target.closest('[data-action="openCal"]')) { CAL = null; calDraw(); }
   });
   document.addEventListener('keydown', (ev) => { if (CAL && ev.key === 'Escape') { CAL = null; calDraw(); } });
+  // Calendario de alimentación: con el mouse se toca o se arrastra sobre los días; en pantallas táctiles y con
+  // teclado, cada toque (o Enter) cambia un día. Tocar un día que ya tiene el tipo elegido lo deja sin asignar.
+  let fcPaint = null, fcSkipClick = false;
+  function fcApply(el) {
+    const a = A(); if (!a || !fcPaint) return;
+    const d = el.dataset.fc, cal = calOf(a), dt = fcPaint.val ? a.dayTypes.find((x) => x.id === fcPaint.val) : null;
+    if (dt) cal[d] = dt.id; else delete cal[d];
+    // Se actualiza el mismo botón (si se reemplazara, el navegador perdería el «soltar» del mouse).
+    const tmp = document.createElement('div'); tmp.innerHTML = fcDayBtn(a, d, todayISO()); const nb = tmp.firstElementChild;
+    el.className = nb.className; el.setAttribute('style', nb.getAttribute('style') || ''); el.title = nb.title;
+    el.setAttribute('aria-label', nb.getAttribute('aria-label')); el.innerHTML = nb.innerHTML;
+  }
+  const fcStart = (el) => { const a = A(), b = fcBrushOf(a); fcPaint = { val: b === 'clear' || (a.calendar || {})[el.dataset.fc] === b ? null : b }; fcApply(el); };
+  document.addEventListener('pointerdown', (ev) => {
+    if (fcPaint) fcEnd(); // por si un «soltar» anterior no llegó
+    fcSkipClick = false;
+    const el = ev.target.closest && ev.target.closest('[data-fc]');
+    if (!el || ev.pointerType === 'touch' || ev.button > 0) return;
+    ev.preventDefault(); fcStart(el);
+  });
+  document.addEventListener('pointerover', (ev) => { if (!fcPaint) return; const el = ev.target.closest && ev.target.closest('[data-fc]'); if (el) fcApply(el); });
+  function fcEnd() { if (!fcPaint) return; fcPaint = null; fcSkipClick = true; setTimeout(() => { fcSkipClick = false; }, 0); save(); render(); }
+  document.addEventListener('pointerup', fcEnd); document.addEventListener('pointercancel', fcEnd);
+  document.addEventListener('click', (ev) => {
+    const el = ev.target.closest && ev.target.closest('[data-fc]'); if (!el) return;
+    if (fcSkipClick) { fcSkipClick = false; return; }
+    fcStart(el); fcPaint = null; save(); render();
+  });
   document.addEventListener('click', (ev) => {
     const link = ev.target.closest('a[href^="#/"]');
     if (link && !link.dataset.action) { ev.preventDefault(); go(link.getAttribute('href').slice(2)); return; }
@@ -3874,6 +4017,7 @@
     a.ui = Object.assign(base.ui, a.ui || {});
     if (!a.dayTypes || !a.dayTypes.length) { a.dayTypes = base.dayTypes; a.activeDay = base.activeDay; }
     a.portal = Object.assign(newPortal(), isPlain(a.portal) ? a.portal : {});
+    a.calendar = isPlain(a.calendar) ? a.calendar : {};
     fixMealNames(a);
     syncTimeline(a);
     return a;
