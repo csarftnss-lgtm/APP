@@ -1479,3 +1479,9 @@ label.btn.file-pick { display: inline-flex; align-items: center; }
 .next-stage b { font-size: 18px; }
 .next-stage .ns-go { flex: none; width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--primary-bg); color: var(--primary-ink); }
 @media print { .next-stage { display: none !important; } }
+
+/* Mini cut: en pantallas angostas el gráfico conserva un ancho legible y se desplaza dentro del recuadro. */
+@media (max-width: 640px) {
+  .mc-chart { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .mc-chart .chart-box svg { min-width: 620px; }
+}

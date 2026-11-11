@@ -154,6 +154,8 @@
   };
   // Pestaña «Planificación»: objetivo de la etapa, fechas y lista de objetivos (parte con 4 en blanco).
   const newPlanif = () => ({ objetivo: '', inicio: '', termino: '', objetivos: ['', '', '', ''] });
+  // Pestaña «Mini cut»: fase corta de déficit con sus fechas y el % de pérdida semanal buscado.
+  const newMiniCut = () => ({ inicio: '', termino: '', pct: null });
   const newOption = () => ({ id: uid(), title: '', image: null, foods: [], notes: '' });
   const newMeal = (name, time, pct) => ({ id: uid(), name, time, pP: pct, pC: pct, pG: pct, options: [newOption()], sel: 0, active: 0 });
   function newDayType(name, color, ajuste, meals) {
@@ -170,6 +172,7 @@
       dayTypes: dts, activeDay: dts[0].id,
       tracking: { config: { inicio: mondayOf(todayISO()), semanas: 12, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000 }, weeks: {}, daily: {} },
       ui: { trackTab: 'panel', panelWeek: null, chartMetric: 'abd' },
+      minicut: newMiniCut(),
       portal: newPortal(),
     };
   }
@@ -1389,14 +1392,14 @@
   const SEG_TABS = [['panel', 'Panel'], ['diario', 'Registro diario de peso'], ['semanal', 'Seguimiento semanal'], ['guia', 'Instrucciones y escalas'], ['config', 'Configuración']];
   const CLIENT_SEG_TABS = SEG_TABS.filter(([k]) => k !== 'config');
   const PLAN_NAV = [
-    ['Planificación', [['req', 'Requerimientos', 'calc'], ['planif', 'Planificación', 'target'], ['menu', 'Menú diario', 'menu'], ['dist', 'Distribución de comidas', 'clock'], ['minuta', 'Minuta', 'down']]],
+    ['Planificación', [['req', 'Requerimientos', 'calc'], ['minicut', 'Mini cut', 'chart'], ['planif', 'Planificación', 'target'], ['menu', 'Menú diario', 'menu'], ['dist', 'Distribución de comidas', 'clock'], ['minuta', 'Minuta', 'down']]],
     ['Recursos', [['alimentos', 'Base de alimentos', 'db']]],
   ];
   const SEG_ICONS = { panel: 'chart', diario: 'edit', semanal: 'clip', guia: 'menu', config: 'target', acceso: 'user' };
   const PLAN_LABEL = Object.fromEntries(PLAN_NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
   function viewPlan(tab) {
-    const views = { req: viewReq, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
+    const views = { req: viewReq, minicut: viewMiniCut, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
     if (!views[tab]) tab = 'req';
     const a = A(), segLabel = '';
     return `<div class="plan-layout ${sbCollapsed ? 'sb-collapsed' : ''}">
@@ -1666,6 +1669,112 @@
           ${TA(`planif.objetivos.${i}`, { rows: 2, ph: `Objetivo ${i + 1}`, attrs: `aria-label="Objetivo ${i + 1}"` })}
           <button class="btn sm ghost icon danger" data-action="delObjetivo" data-i="${i}" title="Eliminar objetivo" aria-label="Eliminar objetivo ${i + 1}">${ic('trash', 14)}</button></li>`).join('')}</ol>`
           : '<div class="muted center" style="padding:18px">Sin objetivos. Pulsa «Agregar objetivo».</div>'}
+      </div>
+    </section>`;
+  }
+
+  // ---------------- Mini cut ----------------
+  // Fase corta de déficit: fechas, % de pérdida semanal buscado y avance con los pesajes del «Registro diario de peso».
+  const miniCutOf = (a) => { if (!isPlain(a.minicut)) a.minicut = newMiniCut(); return a.minicut; };
+  function miniCutCalc(a) {
+    const m = miniCutOf(a), pct = num(m.pct);
+    const hasDates = !!(parseISO(m.inicio) && parseISO(m.termino)), days = hasDates ? daysBetween(m.inicio, m.termino) : null;
+    const c = { m, pct, days, valid: hasDates && days > 0, inverted: hasDates && days < 0, pctOk: pct != null && pct > 0 && pct < 100, daily: [], weeks: [] };
+    if (!c.valid) return c;
+    // Pesajes dentro del mini cut (fechas ISO: se comparan como texto).
+    const dly = (a.tracking && a.tracking.daily) || {};
+    c.daily = Object.keys(dly).filter((d) => d >= m.inicio && d <= m.termino).sort()
+      .map((d) => ({ d, t: daysBetween(m.inicio, d), v: num(dly[d] && dly[d].peso) })).filter((p) => p.v != null);
+    // Promedio de cada semana del mini cut (semana 1 = días 0 a 6 desde la fecha inicial).
+    for (let k = 0; k * 7 <= days; k++) {
+      const vs = c.daily.filter((p) => Math.floor(p.t / 7) === k).map((p) => p.v);
+      if (vs.length) c.weeks.push({ k, t: Math.min(k * 7 + 3, days), n: vs.length, v: vs.reduce((x, y) => x + y, 0) / vs.length });
+    }
+    // Peso de partida: promedio de la primera semana si ya hay pesajes; si no, el peso de Requerimientos.
+    const w1 = c.weeks.find((w) => w.k === 0);
+    c.p0 = w1 ? w1.v : eff(a).peso;
+    c.p0src = w1 ? 'promedio de la semana 1' : 'peso de Requerimientos';
+    if (c.p0 == null || !c.pctOk) return c;
+    // Trayectoria objetivo (t = días desde la fecha inicial). Si el peso de partida es el promedio de la semana 1,
+    // se ancla al centro de esa semana, donde también se grafica ese promedio.
+    const t0 = w1 ? w1.t : 0;
+    c.target = (t) => c.p0 * Math.pow(1 - pct / 100, (t - t0) / 7);
+    c.pEnd = c.target(days); c.kgTotal = c.p0 - c.pEnd; c.pctTotal = (c.kgTotal / c.p0) * 100;
+    const rc = reqCalc(a);
+    c.kcalDia = ((c.p0 * pct) / 100) * rc.kcalKg / 7; c.kcal = rc.get != null ? rc.get - c.kcalDia : null;
+    const last = c.weeks[c.weeks.length - 1];
+    if (last && last.k > 0) {
+      c.last = last; c.expected = c.target(last.t); c.lost = c.p0 - last.v; c.expLost = c.p0 - c.expected;
+      c.goal = c.kgTotal > 0 ? (c.lost / c.kgTotal) * 100 : null;
+    }
+    return c;
+  }
+  function miniCutChart(c) {
+    const day = (t) => parseISO(addDays(c.m.inicio, t)).getTime();
+    const target = [];
+    for (let t = 0; t < c.days; t += 7) target.push({ x: day(t), y: c.target(t), label: `Objetivo ${fmtDate(addDays(c.m.inicio, t))} · ${fmt(c.target(t), 2)} kg` });
+    target.push({ x: day(c.days), y: c.pEnd, label: `Objetivo final ${fmtDate(c.m.termino)} · ${fmt(c.pEnd, 2)} kg` });
+    const dots = c.daily.map((p) => ({ x: day(p.t), y: p.v, label: `${fmtDate(p.d)} · ${fmt(p.v, 1)} kg` }));
+    const avgs = c.weeks.map((w) => ({ x: day(w.t), y: w.v, label: `Semana ${w.k + 1} · ${fmt(w.v, 2)} kg (${w.n} pesaje${w.n === 1 ? '' : 's'})` }));
+    return chartSVG([{ pts: target, color: 'var(--muted)', type: 'dash' }, { pts: dots, color: 'var(--chart-dots)', type: 'dots' }, { pts: avgs, color: 'var(--accent)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 280 });
+  }
+  function viewMiniCut() {
+    const a = A(), c = miniCutCalc(a), m = c.m;
+    const date = (k, label) => `<div class="field"><label for="mc-${k}">${label}</label>${D(`minicut.${k}`, `mc-${k}`)}</div>`;
+    const L = (l, v) => `<div class="stat-line"><span>${l}</span><b>${v}</b></div>`;
+    const dur = c.valid ? planifDuration(m) : null, today = todayISO();
+    const empty = (msg) => `<div class="muted center" style="padding:30px">${msg}</div>`;
+    let note = '';
+    if (c.inverted) note = '<div class="hint mt12" style="color:var(--warn)" role="alert">La fecha final es anterior a la fecha inicial.</div>';
+    else if (dur) note = `<div class="hint mt12">Duración del mini cut: <b>${dur}</b>.</div>`;
+    let body;
+    if (!c.valid) body = empty(c.inverted ? 'Corrige las fechas para ver el plan del mini cut.' : 'Elige la fecha inicial y la final para ver el plan y el avance del mini cut.');
+    else if (c.p0 == null) body = empty('Falta el peso del atleta: ingrésalo en «Requerimientos» o registra pesajes en «Seguimiento › Registro diario de peso».');
+    else if (!c.pctOk) body = empty('Indica el % de pérdida buscado por semana para calcular la trayectoria.');
+    else {
+      const elapsed = daysBetween(m.inicio, today);
+      const when = elapsed < 0 ? `Comienza el ${fmtDate(m.inicio)}` : elapsed > c.days ? 'Terminado' : `Día ${elapsed + 1} de ${c.days + 1}`;
+      const goalW = c.goal != null ? Math.max(0, Math.min(100, c.goal)) : 0;
+      body = `
+        <div class="grid g2">
+          <div>
+            <div class="label">Plan</div>
+            ${L('Peso inicial', `${fmt(c.p0, 1)} kg <span class="muted small">· ${c.p0src}</span>`)}
+            ${L('Peso final esperado', `${fmt(c.pEnd, 1)} kg`)}
+            ${L('Pérdida esperada', `${fmtS(-c.kgTotal, 2)} kg <span class="muted small">(${fmtS(-c.pctTotal, 1)} %)</span>`)}
+            ${L('Déficit diario estimado', `${fmt(c.kcalDia)} kcal`)}
+            ${L('Kcal a consumir', c.kcal != null ? `<span class="kc">${fmt(c.kcal)}</span>` : '<span class="muted small">Completa el GET en Requerimientos</span>')}
+          </div>
+          <div>
+            <div class="label">Avance</div>
+            ${L('Momento', when)}
+            ${c.last ? `
+              ${L(`Promedio semana ${c.last.k + 1}`, `${fmt(c.last.v, 2)} kg`)}
+              ${L('Objetivo a esa fecha', `${fmt(c.expected, 2)} kg`)}
+              ${L('Diferencia frente al objetivo', `${fmtS(c.last.v - c.expected, 2)} kg <span class="muted small">${c.last.v - c.expected > 0 ? '(por encima)' : '(en meta o por debajo)'}</span>`)}
+              <div class="stat-line" style="display:block"><div style="display:flex;justify-content:space-between"><span>Pérdida lograda</span><b>${fmtS(-c.lost, 2)} de ${fmtS(-c.kgTotal, 2)} kg${c.goal != null ? ` · ${fmt(c.goal, 0)} %` : ''}</b></div>
+                <div class="progress" role="progressbar" aria-label="Avance hacia la meta del mini cut" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(goalW)}"><span style="width:${goalW}%;--c:var(--ok)"></span></div></div>`
+            : `<div class="small muted mt8">El avance aparece cuando haya pesajes desde la semana 2 del mini cut en «Seguimiento › Registro diario de peso».</div>`}
+          </div>
+        </div>
+        <div class="row mt16" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div class="label" style="margin:0">Avance del peso</div>
+          <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Promedio semanal</span><span><i class="dash"></i>Trayectoria objetivo</span></div>
+        </div>
+        <div class="mt8 mc-chart">${miniCutChart(c)}</div>
+        ${c.daily.length ? '' : '<div class="small muted mt8">Aún no hay pesajes entre estas fechas: el gráfico muestra solo la trayectoria objetivo.</div>'}`;
+    }
+    return `
+    <section class="card">
+      <div class="card-head"><h3>Mini cut</h3><span class="sub">Fase corta de déficit: plazo, meta y avance</span></div>
+      <div class="card-body">
+        <div class="grid g3">
+          ${date('inicio', 'Fecha inicial')}
+          ${date('termino', 'Fecha final')}
+          ${F('% de pérdida de grasa buscado', suffix(I('minicut.pct', { num: true, live: true, ph: 'Ej.: 1' }), '% / sem'), 'Del peso corporal, por semana. En un mini cut suele ser 0,75–1,25 %.')}
+        </div>
+        ${note}
+        <div class="mt16">${body}</div>
       </div>
     </section>`;
   }
@@ -3434,6 +3543,7 @@
     a.ui = Object.assign(base.ui, a.ui || {});
     if (!a.dayTypes || !a.dayTypes.length) { a.dayTypes = base.dayTypes; a.activeDay = base.activeDay; }
     a.portal = Object.assign(newPortal(), isPlain(a.portal) ? a.portal : {});
+    a.minicut = Object.assign(newMiniCut(), isPlain(a.minicut) ? a.minicut : {});
     fixMealNames(a);
     return a;
   }
