@@ -1534,3 +1534,10 @@ td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
 .day-tags { display: flex; gap: 4px; margin-top: 3px; }
 .day-tag { font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; border-radius: 99px; color: var(--text-2); background: var(--surface-3); }
 .day-tag.peso { color: var(--accent-text, var(--accent)); background: var(--accent-soft); }
+
+/* Registro diario: hambre según el tipo de día de cada fila */
+.day-tag.dtype { display: inline-flex; align-items: center; gap: 5px; }
+.day-tag.dtype::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--dc); }
+.h-td { vertical-align: top; }
+.h-meal { display: block; max-width: 112px; margin: 6px 8px 0; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.h-na { text-align: center; }

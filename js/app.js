@@ -2201,13 +2201,32 @@
       ${isClientView() ? '' : `<div class="mt8"><button class="btn sm" data-action="applyStageDates">Usar las fechas de Configuración</button></div>`}</div>`;
   }
 
-  // Días de pesaje y de entrenamiento que define la etapa de ese día.
+  // Tipo de día de la minuta (Entrenamiento / Descanso) que corresponde a una fecha: lo anotado en «Entreno»
+  // (sí / no) y, si no se anotó, los días de entrenamiento de la etapa en Configuración. null si no se sabe.
+  function dayTypeFor(a, d) {
+    const dts = a.dayTypes || []; if (!dts.length) return null;
+    const train = dts.find((x) => /entren/i.test(x.name || '')) || dts[0];
+    const rest = dts.find((x) => /descans/i.test(x.name || '')) || dts.find((x) => x !== train) || train;
+    const e = dailyOf(a, d).entreno;
+    if (e === 'si' || e === 'no') return { dt: e === 'si' ? train : rest, src: 'Según lo anotado en «Entreno»' };
+    const s = stageOfDay(a, d);
+    if (s && (s.diasEntreno || []).length) return { dt: s.diasEntreno.includes(dow(d)) ? train : rest, src: 'Según los días de entrenamiento de la etapa (Configuración)' };
+    return null;
+  }
+  // Tipo de día y días de pesaje que define la etapa.
   function dayTags(a, d) {
-    const s = stageOfDay(a, d); if (!s) return '';
-    const i = dow(d), t = [];
-    if ((s.diasPeso || []).includes(i)) t.push('<span class="day-tag peso" title="Día de reporte de peso (Configuración)">Pesaje</span>');
-    if ((s.diasEntreno || []).includes(i)) t.push('<span class="day-tag" title="Día de entrenamiento (Configuración)">Entreno</span>');
+    const t = [], s = stageOfDay(a, d), td = dayTypeFor(a, d);
+    if (td) t.push(`<span class="day-tag dtype" style="--dc:${esc(td.dt.color || 'var(--muted)')}" title="${esc(td.src)}">${esc(td.dt.name)}</span>`);
+    if (s && (s.diasPeso || []).includes(dow(d))) t.push('<span class="day-tag peso" title="Día de reporte de peso (Configuración)">Pesaje</span>');
     return t.length ? `<span class="day-tags">${t.join('')}</span>` : '';
+  }
+  // Celda de hambre: muestra la comida de ese tipo de día en esa posición. Si el tipo de día tiene menos comidas,
+  // la celda queda vacía (salvo que ya tenga un valor anotado, que se conserva visible).
+  function hungerCell(a, d, h, first) {
+    const td = dayTypeFor(a, d), m = td && td.dt.meals[h - 1], path = `tracking.daily.${d}.h${h}`, cls = `pad0 sc-td h-td${first ? ' g-start' : ''}`;
+    if (td && !m && getP(path) == null) return `<td class="${cls} h-na" title="${esc(td.dt.name)}: ${td.dt.meals.length} comidas"><span class="muted">—</span></td>`;
+    const name = m ? (String(m.name || '').trim() || `Comida ${h}`) : `Comida ${h}`;
+    return `<td class="${cls}">${td ? `<span class="h-meal" title="${esc(name)}${m && m.time ? ' · ' + esc(m.time) : ''}">${esc(name)}</span>` : ''}${scaleSel(path, 1, 7, `Hambre · ${name}`, { hunger: true })}</td>`;
   }
   function segDaily(a) {
     const N = weekCount(a), today = todayISO(), cfg = cfgOf(a), meals = mealCols(a), sh = dailyShow;
@@ -2238,7 +2257,7 @@
         <td class="entry-td">${entry(`tracking.daily.${d}.pasos`, 'pasos')}</td>
         <td class="pad0 train-td">${SEL(`tracking.daily.${d}.entreno`, [['', '—'], ['si', 'Sí'], ['no', 'No']], { cls: 'cell', attrs: 'aria-label="Entrenamiento"' })}</td>
         ${sh.esc ? SCALES.map(([f, lab, mn, mx, rev], i) => `<td class="pad0 sc-td${i === 0 ? ' g-start' : ''}">${scaleSel(`tracking.daily.${d}.${f}`, mn, mx, lab, { rev: !!rev })}</td>`).join('') : ''}
-        ${sh.ham ? meals.idx.map((h, i) => `<td class="pad0 sc-td${i === 0 ? ' g-start' : ''}">${scaleSel(`tracking.daily.${d}.h${h}`, 1, 7, `Hambre comida ${h}`, { hunger: true })}</td>`).join('') : ''}
+        ${sh.ham ? meals.idx.map((h, i) => hungerCell(a, d, h, i === 0)).join('') : ''}
         ${sh.pl ? SKINFOLDS.map(([f, lab], i) => numCell(d, f, lab).replace('m-td', i === 0 ? 'm-td g-start' : 'm-td')).join('') + `<td class="num computed">${pl != null ? fmt(pl, 1) : '—'}</td>` : ''}
         ${sh.per ? PERIMS.map(([f, lab], i) => numCell(d, f, lab).replace('m-td', i === 0 ? 'm-td g-start' : 'm-td')).join('') + `<td class="num computed">${ab != null ? fmt(ab, 1) : '—'}</td>` : ''}
         <td class="pad0 com-td g-start">${I(`tracking.daily.${d}.nota`, { cls: 'cell', ph: 'Sueño, digestión, sensaciones…' })}</td></tr>`;
@@ -2247,7 +2266,7 @@
     const grp = (on, span, label) => (on ? `<th colspan="${span}" class="g-start">${label}</th>` : '');
     return `${mismatchCallout(a)}
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
-      <div class="muted">Peso en ayunas, después de ir al baño y sin tomar agua. Escalas, hambre, pliegues y perímetros se anotan el día que se miden; el seguimiento semanal muestra sus promedios. Un día en blanco no rompe nada.</div>
+      <div class="muted">Peso en ayunas, después de ir al baño y sin tomar agua. Escalas, hambre, pliegues y perímetros se anotan el día que se miden; el seguimiento semanal muestra sus promedios. En «Hambre» aparecen las comidas del tipo de día de cada fila: Entrenamiento si en «Entreno» marcas Sí, Descanso si marcas No; sin anotar, se usan los días de entrenamiento de la etapa. Un día en blanco no rompe nada.</div>
       <button class="btn sm" data-action="goToday">Ir a la semana actual</button>
     </div>
     <div class="col-toggles" role="group" aria-label="Columnas visibles">
@@ -2263,7 +2282,7 @@
         <tr class="grp"><th class="sticky-col"></th><th colspan="3">Registro</th>${grp(sh.esc, SCALES.length, 'Escalas (0-5)')}${grp(sh.ham, meals.idx.length, 'Hambre después de las comidas (1-7)')}${grp(sh.pl, SKINFOLDS.length + 1, 'Pliegues (mm)')}${grp(sh.per, PERIMS.length + 1, 'Perímetros (cm)')}<th class="g-start"></th></tr>
         <tr><th class="sticky-col">Día</th><th class="entry-th">Peso en ayunas</th><th class="entry-th">Pasos</th><th class="train-th">Entreno</th>
           ${sh.esc ? SCALES.map(([, lab], i) => `<th class="${i === 0 ? 'g-start' : ''}">${lab}</th>`).join('') : ''}
-          ${sh.ham ? meals.idx.map((h, i) => `<th class="${i === 0 ? 'g-start' : ''}">${meals.head(h)}</th>`).join('') : ''}
+          ${sh.ham ? meals.idx.map((h, i) => `<th class="${i === 0 ? 'g-start' : ''}" title="La comida de cada fila depende del tipo de día (Entrenamiento o Descanso)">Comida ${h}</th>`).join('') : ''}
           ${sh.pl ? SKINFOLDS.map(([, lab], i) => `<th class="${i === 0 ? 'g-start' : ''}">${lab}</th>`).join('') + '<th class="num">Σ</th>' : ''}
           ${sh.per ? PERIMS.map(([, lab], i) => `<th class="${i === 0 ? 'g-start' : ''}">${lab}</th>`).join('') + '<th class="num">Σ abd.</th>' : ''}
           <th class="g-start">Comentarios del día</th></tr>
