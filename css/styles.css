@@ -1485,3 +1485,52 @@ label.btn.file-pick { display: inline-flex; align-items: center; }
   .mc-chart { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .mc-chart .chart-box svg { min-width: 620px; }
 }
+
+/* ===== Seguimiento › Configuración: etapas del proceso ===== */
+/* Colores de las series del gráfico (validados para daltonismo y contraste en cada tema). */
+:root { --vz-1: #3987e5; --vz-2: #d95926; --vz-3: #199e70; --vz-4: #c98500; --vz-5: #d55181; }
+:root[data-pc-theme="light"] { --vz-1: #2a78d6; --vz-2: #eb6834; --vz-3: #1baf7a; --vz-4: #eda100; --vz-5: #e87ba4; }
+
+/* Días de la semana (entrenamiento y pesaje) */
+.dow-pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.dow { width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border-2); background: var(--bg-2); color: var(--muted); font: inherit; font-weight: 600; cursor: pointer; transition: background var(--dur-1), border-color var(--dur-1), color var(--dur-1); }
+.dow:hover { color: var(--text); border-color: var(--accent); }
+.dow.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.dow:focus-visible, .vchip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Variables del gráfico */
+.vchips { display: grid; gap: 8px; }
+.vgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vgroup-l { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; min-width: 92px; }
+.vchip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 99px; border: 1px solid var(--border-2); background: var(--bg-2); color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; }
+.vchip:hover { color: var(--text); }
+.vchip.on { color: var(--text); border-color: var(--border-2); background: var(--surface-3); }
+.vchip .sw { width: 10px; height: 10px; border-radius: 3px; background: var(--sw); opacity: .35; }
+.vchip .sw.dash { height: 2px; border-radius: 1px; background: repeating-linear-gradient(90deg, var(--sw) 0 3px, transparent 3px 5px); }
+.vchip.on .sw { opacity: 1; }
+
+/* Paneles del gráfico (uno por unidad) */
+.sm-panel + .sm-panel { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.sm-title { font-size: 12.5px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+.stage-table summary { cursor: pointer; color: var(--text-2); font-size: 13px; }
+.stage-table summary:hover { color: var(--text); }
+@media (max-width: 640px) {
+  .stage-chart .chart-box { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .stage-chart .chart-box svg { min-width: 620px; }
+  .vgroup-l { min-width: 100%; }
+}
+
+/* Alertas de fechas */
+.alert-callout { border-color: rgb(var(--warn-rgb) / .45); background: rgb(var(--warn-rgb) / .08); }
+.alert-callout > b:first-child { color: var(--warn); }
+.alert-list { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+td.etapa-warn { box-shadow: inset 3px 0 0 var(--warn); }
+td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
+
+/* Registro diario: etapa de la semana y días planificados */
+.wk-title .wk-etapa { display: inline-flex; align-items: center; gap: 6px; }
+.wk-etapa-sel { height: 28px; min-width: 190px; font-size: 12.5px; padding-block: 0; }
+.wk-etapa .busc-tag { margin: 0; }
+.day-tags { display: flex; gap: 4px; margin-top: 3px; }
+.day-tag { font-size: 10px; font-weight: 600; letter-spacing: .02em; padding: 1px 6px; border-radius: 99px; color: var(--text-2); background: var(--surface-3); }
+.day-tag.peso { color: var(--accent-text, var(--accent)); background: var(--accent-soft); }
