@@ -369,7 +369,7 @@
         })),
       };
     });
-    const cal = Object.fromEntries(Object.entries(a.calendar || {}).filter(([, id]) => a.dayTypes.some((d) => d.id === id)).sort(([x], [y]) => (x < y ? -1 : 1)));
+    const cal = Object.fromEntries(planDays(a).map(([d, dt]) => [d, dt.id])); // calendario ya resuelto: lo marcado a mano y lo que dan las etapas
     return { nombre: a.q.nombre || '', dayTypes, ...(Object.keys(cal).length ? { calendar: cal } : {}), foods: [...used.values()].map((f) => Object.assign({}, f)), updatedAt: new Date().toISOString() };
   }
   async function publishPlan(a) {
@@ -639,10 +639,12 @@
     let get = tmb != null ? tmb * factor : null;
     if (get != null && r.sumarPasos && pasosKcal) get += pasosKcal;
     const kcalKg = num(r.kcalKg) ?? 7000;
+    // La etapa vigente de Plan › Planificación manda: fija el objetivo (déficit / mantenimiento / volumen) y, en déficit, el % semanal.
+    const se = stageEnergy(a), objetivo = se ? se.objetivo : r.objetivo;
     const def = {}; const vol = {}; const mant = {};
     if (e.peso != null) {
       // Déficit: % de pérdida de peso semanal.
-      def.pct = num(r.pctDef) ?? 0; def.kgSem = e.peso * def.pct / 100; def.gSem = def.kgSem * 1000; def.kgMes = def.kgSem * SEM_MES;
+      def.pct = (se && se.pct != null ? se.pct : num(r.pctDef)) ?? 0; def.kgSem = e.peso * def.pct / 100; def.gSem = def.kgSem * 1000; def.kgMes = def.kgSem * SEM_MES;
       def.kcalSem = def.kgSem * kcalKg; def.kcalDia = def.kcalSem / 7;
       def.kcal = get != null ? get - def.kcalDia : null;
       // Volumen: % de aumento de peso semanal o mensual (según la unidad elegida).
@@ -657,12 +659,12 @@
       mant.kcalSem = mant.kgSem * kcalKg; mant.kcalDia = mant.kcalSem / 7;
       mant.kcal = get != null ? get + mant.kcalDia : null;
     }
-    const obj = r.objetivo === 'deficit' ? def.kcal : r.objetivo === 'volumen' ? vol.kcal : (mant.kcal ?? get);
-    return { e, eq, tmb, factor, get, pasos, pasosKcal, def, vol, mant, obj, kcalKg };
+    const obj = objetivo === 'deficit' ? def.kcal : objetivo === 'volumen' ? vol.kcal : (mant.kcal ?? get);
+    return { e, eq, tmb, factor, get, pasos, pasosKcal, def, vol, mant, obj, kcalKg, objetivo, se };
   }
   function objPanel(r, rc) {
     const L = (l, v) => `<div class="stat-line"><span>${l}</span><b>${v}</b></div>`;
-    if (r.objetivo === 'volumen') {
+    if (rc.objetivo === 'volumen') {
       const v = rc.vol, u = v.unit || 'mes';
       return `<div class="label" style="margin-bottom:8px">Calculadora de volumen</div>
         <div class="seg sm mb8">${[['sem', 'Semanal'], ['mes', 'Mensual']].map(([k, l]) => `<button class="${u === k ? 'active' : ''}" data-action="setVolUnit" data-v="${k}">${l}</button>`).join('')}</div>
@@ -674,7 +676,7 @@
           <div class="stat-line"><span>Kcal a consumir</span><b class="kc">${fmt(v.kcal)}</b></div>
         </div>`;
     }
-    if (r.objetivo === 'mantenimiento') {
+    if (rc.objetivo === 'mantenimiento') {
       const m = rc.mant, sg = (x) => fmtS(x, 3);
       return `<div class="label" style="margin-bottom:8px">Calculadora de mantenimiento</div>
         ${F('% de cambio mensual del peso', suffix(I('req.pctMant', { num: true, live: true, ph: '0' }), '%'), 'Negativo = pérdida leve · 0 = mantener · positivo = ganancia leve.')}
@@ -687,7 +689,9 @@
     }
     const d = rc.def;
     return `<div class="label" style="margin-bottom:8px">Calculadora de déficit</div>
-      ${F('% ↓ semanal del peso', suffix(I('req.pctDef', { num: true, live: true }), '%'), 'Referencia habitual: 0,5–1 % del peso corporal por semana.')}
+      ${rc.se
+    ? F('% ↓ semanal del peso', suffix(I(`tracking.config.stages.${rc.se.i}.objetivo`, { num: true, live: true, ph: vstr(r.pctDef).replace('.', ',') }), '%'), `Es el objetivo de la etapa E${rc.se.i + 1}: si lo cambias aquí, cambia también en Planificación y en el seguimiento.`)
+    : F('% ↓ semanal del peso', suffix(I('req.pctDef', { num: true, live: true }), '%'), 'Referencia habitual: 0,5–1 % del peso corporal por semana.')}
       <div class="mt8">
         ${L('kg ↓ semanal', fmt(d.kgSem, 3))}${L('g ↓ semanal', fmt(d.gSem, 1))}
         ${L('kg ↓ mensual (aprox.)', fmt(d.kgMes, 3))}
@@ -831,6 +835,27 @@
     stagesOf(a).forEach((s) => { if (!stageDated(s)) return; const n = days.filter((d) => d >= s.inicio && d <= s.fin).length; if (n > bestN) { best = s; bestN = n; } });
     return best;
   }
+  // Estado de una etapa según la fecha de hoy: 'now' en curso, 'next' aún no empieza, 'done' terminada, 'none' sin fechas u objetivo.
+  const stageState = (s) => { if (!stageDated(s)) return 'none'; const t = todayISO(); return t < s.inicio ? 'next' : t > s.fin ? 'done' : 'now'; };
+  // Etapa vigente: la que está en curso; si no hay, la próxima en empezar; si no, la última terminada. Manda en Requerimientos.
+  function currentStage(a) {
+    const st = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s));
+    return st.find((x) => stageState(x.s) === 'now')
+      || st.filter((x) => stageState(x.s) === 'next').sort((x, y) => (x.s.inicio < y.s.inicio ? -1 : 1))[0]
+      || st.sort((x, y) => (x.s.fin > y.s.fin ? -1 : 1))[0] || null;
+  }
+  // Objetivo energético (Requerimientos) que corresponde a cada objetivo de etapa. Los que no están aquí no lo fijan.
+  const STAGE_ENERGY = { 'Pérdida de grasa': 'deficit', 'Mini cut': 'deficit', Mantenimiento: 'mantenimiento', 'Ganancia de masa muscular': 'volumen', Volumen: 'volumen' };
+  const pctTxt = (v) => String(+Math.abs(+v).toFixed(2)).replace('.', ','); // 1 → «1», 0.75 → «0,75»
+  const ENERGY_L = { deficit: 'Déficit', mantenimiento: 'Mantenimiento', volumen: 'Volumen' };
+  // Lo que la etapa vigente fija en Requerimientos: { s, i, objetivo, pct } (pct = % semanal de pérdida, solo en déficit). null si no fija nada.
+  function stageEnergy(a) {
+    if (!a || !a.tracking || !isPlain(a.tracking.config)) return null;
+    const x = currentStage(a); if (!x) return null;
+    const o = STAGE_ENERGY[x.s.tipo]; if (!o) return null;
+    const pct = o === 'deficit' ? num(x.s.objetivo) : null;
+    return { s: x.s, i: x.i, objetivo: o, pct: pct != null ? Math.abs(pct) : null };
+  }
   // % semanal con signo: negativo en etapas de pérdida, positivo en las de ganancia.
   function stageTarget(s) { const v = num(s && s.objetivo); return v == null ? null : GAIN_TYPES.includes(s.tipo) ? Math.abs(v) : -Math.abs(v); }
   function weekEtapa(a, k) {
@@ -841,6 +866,12 @@
   // Semana marcada a mano con una etapa distinta de la que dicen las fechas de las etapas.
   function etapaMismatch(a, k) { const own = wk(a, k).etapa, s = stageOfWeek(a, k); return own && s && own !== s.tipo ? s : null; }
   function mismatchWeeks(a) { const out = []; for (let k = 0; k <= weekCount(a); k++) { const s = etapaMismatch(a, k); if (s) out.push({ k, own: wk(a, k).etapa, s }); } return out; }
+  // Semanas con un % buscado puesto a mano que no es el objetivo de su etapa.
+  function manualBuscadoWeeks(a) {
+    const out = [];
+    for (let k = 1; k <= weekCount(a); k++) { const own = num(wk(a, k).buscado), tg = stageTarget(stageOfWeek(a, k)); if (own != null && tg != null && own !== tg) out.push({ k, own, tg }); }
+    return out;
+  }
   // Duración contando el primer y el último día: «12 semanas», «5 semanas y 3 días»…
   function stageDur(s) {
     if (!stageDated(s)) return '';
@@ -919,6 +950,8 @@
       const off = daysBetween(c0, s.inicio);
       if (off > 0 && off % 7) { const k = Math.floor(off / 7), ow = stageOfWeek(a, k); out.push(`${name(s)} empieza un ${DOW_N[dow(s.inicio)].toLowerCase()}, a mitad de la ${weekLabel(k).toLowerCase()} del registro (que parte el ${fmtDate(weekStart(a, k))}): esa semana queda como «${esc(ow ? ow.tipo : '—')}».`); }
     });
+    const mb = manualBuscadoWeeks(a);
+    if (mb.length) out.push(`${mb.length === 1 ? 'Una semana tiene' : `${mb.length} semanas tienen`} un % buscado puesto a mano, distinto al objetivo de su etapa: ${mb.slice(0, 6).map((x) => `${weekLabel(x.k)} (${fmtS(x.own)} %; etapa ${fmtS(x.tg)} %)`).join(', ')}${mb.length > 6 ? '…' : ''}. En esas semanas manda el valor manual.`);
     const mm = mismatchWeeks(a);
     if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de las etapas.`);
     return out;
@@ -1346,7 +1379,7 @@
       qChips = next ? `<a class="lc-chip" href="#/cuestionario" data-action="goQ" data-id="${next[0]}">Continuar en: ${next[1]}</a>` : '<span class="pill ok">Cuestionario completo</span>';
       const rc = reqCalc(a);
       pStatus = `<div class="lc-rows">${a.dayTypes.map((dt) => { const t = dayTargets(a, dt, rc), tot = dayTotals(dt), p = adq(tot.kcal, t.kcal); return `<div class="lc-row"><span><span class="color-dot" style="background:${dt.color}"></span> ${esc(dt.name)}</span><span><b class="kc">${t.kcal != null ? fmt(t.kcal) + ' kcal' : '—'}</b>${p != null ? ` <span class="small ${adqCls(p)}">menú ${fmt(p)}%</span>` : ''}</span></div>`; }).join('')}</div>`;
-      pChips = [['req', 'Requerimientos'], ['menu', 'Menú diario'], ['dist', 'Distribución'], ['alimentos', 'Base de alimentos']].map(([k, l]) => `<a class="lc-chip" href="#/plan/${k}">${l}</a>`).join('');
+      pChips = [['req', 'Requerimientos'], ['planif', 'Planificación'], ['menu', 'Menú diario'], ['dist', 'Distribución'], ['alimentos', 'Base de alimentos']].map(([k, l]) => `<a class="lc-chip" href="#/plan/${k}">${l}</a>`).join('');
       const cw = currentWeek(a), lw = lastWeight(a);
       let st = null; for (let k = Math.min(cw, weekCount(a)); k >= 1; k--) { const s = status(a, k); if (s.key !== 'none') { st = s; break; } }
       sStatus = `<div class="lc-rows">
@@ -1364,8 +1397,8 @@
       cta: 'Abrir población general' });
     return `<div class="launch-grid">
       ${launchCard({ n: '01', icon: 'clip', color: 'var(--accent)', title: 'Cuestionario inicial', href: '#/cuestionario', desc: 'Datos básicos, objetivo, suplementación, actividad física, nutrición peri-entrenamiento, recordatorio de 24 h y consumo.', status: qStatus, chips: qChips, cta: 'Abrir cuestionario', disabled: dis })}
-      ${launchCard({ n: '02', icon: 'target', color: 'var(--c-c)', title: 'Plan', href: '#/plan/req', desc: 'Requerimientos, distribución de comidas y menú diario por tipo de día, con la base de alimentos.', status: pStatus, chips: pChips, cta: 'Abrir planificación', disabled: dis })}
-      ${launchCard({ n: '03', icon: 'chart', color: 'var(--ok)', title: 'Seguimiento', href: '#/seg', desc: 'Panel de progreso, registro diario, seguimiento semanal, instrucciones y configuración.', status: sStatus, chips: sChips, cta: 'Abrir seguimiento', disabled: dis })}
+      ${launchCard({ n: '02', icon: 'target', color: 'var(--c-c)', title: 'Plan', href: '#/plan/req', desc: 'Requerimientos, planificación de las etapas, menú diario y distribución de comidas, con la base de alimentos.', status: pStatus, chips: pChips, cta: 'Abrir planificación', disabled: dis })}
+      ${launchCard({ n: '03', icon: 'chart', color: 'var(--ok)', title: 'Seguimiento', href: '#/seg', desc: 'Panel de progreso, registro diario, seguimiento semanal e instrucciones.', status: sStatus, chips: sChips, cta: 'Abrir seguimiento', disabled: dis })}
       ${pgCard}
     </div>`;
   }
@@ -1742,13 +1775,14 @@
     </section>
 
     <section class="card mt16">
-      <div class="card-head"><h3>Objetivo energético</h3><span class="sub">Elige el objetivo para ver su calculadora</span><span class="spacer"></span>
-        <div class="seg">${[['deficit', 'Déficit'], ['mantenimiento', 'Mantenimiento'], ['volumen', 'Volumen']].map(([k, l]) => `<button class="${r.objetivo === k ? 'active' : ''}" data-action="setObj" data-v="${k}">${l}</button>`).join('')}</div>
+      <div class="card-head"><h3>Objetivo energético</h3><span class="sub">${rc.se ? `Lo define la etapa E${rc.se.i + 1} «${esc(rc.se.s.tipo)}»` : 'Elige el objetivo para ver su calculadora'}</span><span class="spacer"></span>
+        <div class="seg${rc.se ? ' locked' : ''}"${rc.se ? ' title="Lo define la etapa vigente en Plan › Planificación"' : ''}>${[['deficit', 'Déficit'], ['mantenimiento', 'Mantenimiento'], ['volumen', 'Volumen']].map(([k, l]) => `<button class="${rc.objetivo === k ? 'active' : ''}" data-action="setObj" data-v="${k}" ${rc.se ? 'disabled' : ''}>${l}</button>`).join('')}</div>
       </div>
+      ${reqStageNote(a, rc)}
       <div class="card-body obj-grid">
         <div class="obj-panel">${objPanel(r, rc)}</div>
         <div class="obj-summary">
-          <div class="label">Kcal objetivo · ${r.objetivo === 'deficit' ? 'déficit' : r.objetivo === 'volumen' ? 'volumen' : 'mantenimiento'}</div>
+          <div class="label">Kcal objetivo · ${ENERGY_L[rc.objetivo].toLowerCase()}</div>
           <div class="big-num kc">${fmt(rc.obj)}<small> kcal</small></div>
           <div class="stat-line"><span>GET (mantenimiento)</span><b>${fmt(rc.get)}</b></div>
           <div class="stat-line"><span>Diferencia vs GET</span><b>${rc.obj != null && rc.get != null ? fmtS(Math.round(rc.obj - rc.get), 0) : '—'} kcal</b></div>
@@ -1765,6 +1799,24 @@
     <div class="grid g2 mt12">${a.dayTypes.map((dt, i) => dayTypeCard(a, dt, i, rc)).join('')}</div>`;
   }
 
+  // Aviso en «Objetivo energético»: qué etapa lo define y, la primera vez, qué cambió respecto de lo que había.
+  function reqStageNote(a, rc) {
+    const r = a.req, se = rc.se, cs = currentStage(a);
+    const link = '<a href="#/plan/planif">Plan › Planificación</a>';
+    if (!se) {
+      return cs ? `<div class="req-stage-note">La etapa vigente, E${cs.i + 1} «${esc(cs.s.tipo)}», no fija un objetivo energético: se usa el que elijas aquí. Etapas en ${link}.</div>`
+        : `<div class="req-stage-note">Ninguna etapa tiene objetivo y fechas en ${link}: se usa el objetivo que elijas aquí.</div>`;
+    }
+    const st = stageState(se.s), when = st === 'now' ? 'en curso' : st === 'next' ? `empieza el ${fmtDate(se.s.inicio)}` : `terminó el ${fmtDate(se.s.fin)}`;
+    let out = `<div class="req-stage-note">Manda la etapa vigente de ${link}: <b>E${se.i + 1} «${esc(se.s.tipo)}»</b> (${fmtDate(se.s.inicio)} – ${fmtDate(se.s.fin)}, ${when}) → <b>${ENERGY_L[se.objetivo]}</b>${se.pct != null ? ` de <b>${pctTxt(se.pct)} % semanal</b>` : ''}.</div>`;
+    // Primera vez con datos anteriores distintos: se muestra qué había y se deja elegir.
+    const old = num(r.pctDef), sameType = r.objetivo === se.objetivo, pctDiff = se.objetivo === 'deficit' && se.pct != null && old != null && old !== se.pct;
+    if (!r.stageLinked && (!sameType || pctDiff)) {
+      out += `<div class="callout alert-callout req-stage-alert" role="alert"><b>Este cálculo cambió.</b> Antes estaba en ${ENERGY_L[r.objetivo] || '—'}${r.objetivo === 'deficit' && old != null ? ` de ${pctTxt(old)} % semanal` : ''}; ahora lo define la etapa.
+        <div class="row mt8" style="gap:8px;flex-wrap:wrap">${sameType && pctDiff ? `<button class="btn sm" data-action="reqKeepOld">Usar ${pctTxt(old)} % en la etapa</button><button class="btn sm ghost" data-action="reqAck">Mantener ${pctTxt(se.pct)} %</button>` : '<button class="btn sm" data-action="reqAck">Entendido</button>'}</div></div>`;
+    }
+    return out;
+  }
   function dayTypeCard(a, dt, i, rc) {
     const t = dayTargets(a, dt, rc), base = `dayTypes.${i}`;
     return `<section class="card">
@@ -1866,6 +1918,20 @@
   // Qué tipo de día de la minuta toca cada fecha. a.calendar = { 'aaaa-mm-dd': id del tipo de día }.
   const calOf = (a) => { if (!isPlain(a.calendar)) a.calendar = {}; return a.calendar; };
   const calType = (a, d) => { const id = a && a.calendar && a.calendar[d]; return id ? (a.dayTypes || []).find((x) => x.id === id) || null : null; };
+  // Tipo de día que da la etapa de esa fecha (sus días de entrenamiento → Entrenamiento; el resto → Descanso). null si la etapa no los define.
+  function stageDayType(a, d) {
+    const s = stageOfDay(a, d); if (!s || !(s.diasEntreno || []).length) return null;
+    const { train, rest } = trainRest(a);
+    return s.diasEntreno.includes(dow(d)) ? train : rest;
+  }
+  // Tipo de día planificado: lo marcado a mano en el calendario (excepción) o, si no, lo que da la etapa.
+  const planType = (a, d) => calType(a, d) || stageDayType(a, d);
+  // Todos los días con tipo planificado, ordenados: [[fecha, tipo de día], …].
+  function planDays(a) {
+    const set = new Set(Object.keys(a.calendar || {}).filter((d) => calType(a, d)));
+    stagesOf(a).forEach((s) => { if (stageDated(s) && (s.diasEntreno || []).length) for (let d = s.inicio; d <= s.fin; d = addDays(d, 1)) set.add(d); });
+    return [...set].sort().map((d) => [d, planType(a, d)]).filter(([, dt]) => dt);
+  }
   const dtInitial = (dt) => (String((dt && dt.name) || '?').trim()[0] || '?').toUpperCase();
   // Tipo de día de entrenamiento y de descanso (por nombre; si no, el 1.º y el 2.º).
   function trainRest(a) {
@@ -1880,30 +1946,30 @@
   const fcShift = (ym, n) => { const [y, m] = ym.split('-').map(Number), d = new Date(y, m - 1 + n, 1, 12); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const fcBrushOf = (a) => (T.fcBrush === 'clear' ? 'clear' : a.dayTypes.some((x) => x.id === T.fcBrush) ? T.fcBrush : a.dayTypes[0].id);
   function fcDayBtn(a, iso, today) {
-    const dt = calType(a, iso), dn = +iso.slice(8), isToday = iso === today;
-    const lab = `${DAYS[parseISO(iso).getDay()]} ${fmtDate(iso)}${isToday ? ' (hoy)' : ''}${dt ? ' · ' + dt.name : ' · sin asignar'}`;
-    return `<button type="button" class="fc-day${dt ? ' on' : ''}${isToday ? ' today' : ''}" data-fc="${iso}"${dt ? ` style="--dc:${esc(dt.color || 'var(--accent)')}"` : ''} title="${esc(lab)}" aria-label="${esc(lab)}">`
+    const man = calType(a, iso), dt = man || stageDayType(a, iso), dn = +iso.slice(8), isToday = iso === today;
+    const lab = `${DAYS[parseISO(iso).getDay()]} ${fmtDate(iso)}${isToday ? ' (hoy)' : ''}${dt ? ` · ${dt.name}${man ? ' (marcado a mano)' : ' (según la etapa)'}` : ' · sin asignar'}`;
+    return `<button type="button" class="fc-day${dt ? (man ? ' on' : ' on auto') : ''}${isToday ? ' today' : ''}" data-fc="${iso}"${dt ? ` style="--dc:${esc(dt.color || 'var(--accent)')}"` : ''} title="${esc(lab)}" aria-label="${esc(lab)}">`
       + `<span class="n">${dn}</span>${isToday ? '<em>Hoy</em>' : ''}${dt ? `<span class="t">${esc(dt.name)}</span><span class="i">${esc(dtInitial(dt))}</span>` : ''}</button>`;
   }
   function feedCalendar(a) {
     const ym = fcMonth(), [y, m] = ym.split('-').map(Number), cal = calOf(a), today = todayISO(), brush = fcBrushOf(a);
-    const counts = {}; Object.keys(cal).forEach((d) => { if (d.startsWith(`${ym}-`) && calType(a, d)) counts[cal[d]] = (counts[cal[d]] || 0) + 1; });
+    const lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate();
+    const counts = {}; let manual = 0;
+    for (let d = 1; d <= nd; d++) { const iso = `${ym}-${pad(d)}`, dt = planType(a, iso); if (dt) counts[dt.id] = (counts[dt.id] || 0) + 1; if (calType(a, iso)) manual++; }
     const total = Object.values(counts).reduce((x, n) => x + n, 0), mName = `${CAL_M[m - 1]} ${y}`;
     const bBtn = (id, label, sw, n) => `<button type="button" class="fc-brush${brush === id ? ' on' : ''}" data-action="fcBrush" data-id="${esc(id)}" aria-pressed="${brush === id}">${sw}${esc(label)}${n != null ? `<small>${n}</small>` : ''}</button>`;
     const brushes = a.dayTypes.map((dt) => bBtn(dt.id, dt.name, `<span class="sw" style="--dc:${esc(dt.color || 'var(--accent)')}">${esc(dtInitial(dt))}</span>`, counts[dt.id] || 0)).join('')
       + bBtn('clear', 'Quitar', '<span class="sw clear"></span>')
       + (a.dayTypes.length < 3 ? `<button type="button" class="fc-brush add" data-action="addDayType">${ic('plus', 13)} Tercer tipo de día</button>` : '');
-    const lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate();
     let cells = '<span class="fc-blank"></span>'.repeat(lead);
     for (let d = 1; d <= nd; d++) cells += fcDayBtn(a, `${ym}-${pad(d)}`, today);
     const isNow = ym === today.slice(0, 7);
     return `<section class="card fc-card no-print" id="feed-cal" aria-label="Calendario de alimentación">
-      <div class="card-head"><h3>Calendario de alimentación</h3><span class="sub">${total ? `${total} ${total === 1 ? 'día asignado' : 'días asignados'} en ${CAL_M[m - 1].toLowerCase()}` : 'Asigna a cada día su tipo de alimentación'}</span><span class="spacer"></span>
+      <div class="card-head"><h3>Calendario de alimentación</h3><span class="sub">${total ? `${total} ${total === 1 ? 'día' : 'días'} con tipo en ${CAL_M[m - 1].toLowerCase()}${manual ? ` · ${manual} a mano` : ''}` : 'Asigna a cada día su tipo de alimentación'}</span><span class="spacer"></span>
         <button type="button" class="btn sm ghost" data-action="fcFold" aria-expanded="${!fcFolded}">${ic(fcFolded ? 'arrowDown' : 'arrowUp', 14)} ${fcFolded ? 'Mostrar' : 'Ocultar'}</button></div>
       ${fcFolded ? '' : `<div class="card-body">
         <div class="fc-tools"><div class="fc-brushes" role="group" aria-label="Tipo de día a aplicar">${brushes}</div>
-          <div class="fc-quick"><button type="button" class="btn sm" data-action="fcFill" title="Llena los días sin asignar de cada etapa con sus días de entrenamiento (Plan › Planificación)">${ic('cal', 14)} Completar con las etapas</button>
-            <button type="button" class="btn sm ghost danger" data-action="fcClear" ${total ? '' : 'disabled'}>Vaciar ${CAL_M[m - 1].toLowerCase()}</button></div></div>
+          <div class="fc-quick"><button type="button" class="btn sm ghost danger" data-action="fcClear" ${manual ? '' : 'disabled'} title="Quita lo marcado a mano este mes: los días vuelven a lo que definen las etapas">Quitar marcas de ${CAL_M[m - 1].toLowerCase()}</button></div></div>
         <div class="fc-nav mt16">
           <button type="button" class="btn sm icon" data-action="fcMonth" data-d="-1" aria-label="Mes anterior" title="Mes anterior">${ic('chevL', 16)}</button>
           <div class="fc-title" aria-live="polite">${mName}</div>
@@ -1911,7 +1977,7 @@
           ${isNow ? '' : '<button type="button" class="btn xs ghost" data-action="fcToday">Volver al mes actual</button>'}
         </div>
         <div class="fc-grid mt8">${DOW_N.map((l) => `<span class="fc-dow" title="${l}">${l.slice(0, 3)}</span>`).join('')}${cells}</div>
-        <div class="hint mt12">Elige un tipo de día y toca los días (o arrastra sobre varios). Tocar un día que ya tiene ese tipo lo deja sin asignar. Las asignaciones quedan guardadas al cambiar de mes. El calendario sale en el documento que se descarga y define las comidas de «Hambre» en el registro diario.</div>
+        <div class="hint mt12">Los días con <b>borde punteado</b> vienen de los días de entrenamiento de cada etapa (Plan › Planificación) y cambian solos si cambias la etapa. Para una excepción, elige un tipo de día y toca el día (o arrastra sobre varios): queda fijo, con borde continuo. Tocar un día fijo con su mismo tipo, o usar «Quitar», lo devuelve a lo que diga la etapa. El calendario sale en el documento que se descarga y define las comidas de «Hambre» en el registro diario.</div>
       </div>`}
     </section>`;
   }
@@ -2054,7 +2120,9 @@
       ${kpi('Peso promedio · semana', avg != null ? `${fmt(avg, 2)}<small>kg</small>` : '—', 'Promedio de los pesajes diarios de la semana.')}
       ${kpi('Cambio desde el inicio', avg != null && avg0 != null ? `${fmtS(avg - avg0, 1)}<small>kg</small>` : '—', `Frente al peso inicial (${fmt(avg0, 1)} kg).`)}
       ${kpi('Semana analizada', `${weekLabel(k)}`, `${fmtDate(weekStart(a, k))} – ${fmtDate(addDays(weekStart(a, k), 6))}`)}
-      ${kpi('Pesajes · 7 días', `${n}<small>/ 7</small>`, n < 3 ? 'Mínimo recomendado: 3 pesajes semanales.' : 'Días con peso registrado durante la semana.')}
+      ${(() => { const dp = (sk && sk.diasPeso) || [], np = dp.length;
+        return np ? kpi('Pesajes · semana', `${n}<small>/ ${np}</small>`, `Meta de la etapa: ${np} ${np === 1 ? 'pesaje' : 'pesajes'} (${dp.slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ')}).`)
+          : kpi('Pesajes · 7 días', `${n}<small>/ 7</small>`, n < 3 ? 'Mínimo recomendado: 3 pesajes semanales.' : 'Días con peso registrado durante la semana.'); })()}
       ${(() => { const sd = weekStepsDays(a, k), miss = stepsIncomplete(a, k);
         const note = (miss ? `<span class="inc-pill">Incompleto · ${sd}/7 días · faltan ${miss} por ingresar</span>` : sd === 7 ? '<span class="small">Semana completa · 7/7 días.</span> ' : '')
           + (meta ? ` Meta diaria: ${fmt(meta)} pasos.` : sd ? '' : ' Promedio de pasos, cuando se registra.');
@@ -2159,7 +2227,7 @@
   // lo anotado en «Entreno» (sí / no); si tampoco, los días de entrenamiento de la etapa (Plan › Planificación). null si no se sabe.
   function dayTypeFor(a, d) {
     const dts = a.dayTypes || []; if (!dts.length) return null;
-    const cd = calType(a, d); if (cd) return { dt: cd, src: 'Según el calendario de alimentación (Plan › Menú diario)' };
+    const cd = calType(a, d); if (cd) return { dt: cd, src: 'Marcado a mano en el calendario de alimentación (Plan › Menú diario)' };
     const { train, rest } = trainRest(a);
     const e = dailyOf(a, d).entreno;
     if (e === 'si' || e === 'no') return { dt: e === 'si' ? train : rest, src: 'Según lo anotado en «Entreno»' };
@@ -2191,14 +2259,14 @@
     for (let k = 0; k <= N; k++) {
       const days = weekDays(a, k), avg = weekAvg(a, k), n = weekWeights(a, k).length, steps = weekSteps(a, k);
       const l = k > 0 ? logrado(a, k) : null, folded = isFolded(a, k);
-      const trained = days.filter((d) => dailyOf(a, d).entreno === 'si').length;
+      const trained = days.filter((d) => dailyOf(a, d).entreno === 'si').length, skw = stageOfWeek(a, k); // metas de pesajes y entrenos: las de la etapa
       rows += `<tr class="week-row" id="wk-${k}"><td colspan="${nCols}"><div class="wk-head">
         <div class="wk-title"><button type="button" class="wk-fold" data-action="foldWeek" data-k="${k}" aria-expanded="${!folded}" title="${folded ? 'Mostrar' : 'Ocultar'} los días de esta semana">${ic(folded ? 'chevR' : 'arrowDown', 14)}</button>
           <b>${weekLabel(k)}</b><span>${fmtDate(days[0])} – ${fmtDate(days[6])}${k === 0 ? ' · peso de partida' : ''}</span><span class="wk-etapa">${etapaCell(a, k, 'cell wk-etapa-sel')}</span></div>
         <div class="wk-stats">
           <span class="wk-stat"><small>Promedio</small><b>${avg != null ? fmt(avg, 2) + ' kg' : '—'}</b></span>
-          <span class="wk-stat"><small>Pesajes</small><b>${n}/7</b></span>
-          <span class="wk-stat"><small>Entrenos</small><b>${trained}/7</b></span>
+          <span class="wk-stat"><small>Pesajes</small><b>${n}/${(skw && (skw.diasPeso || []).length) || 7}</b></span>
+          <span class="wk-stat"><small>Entrenos</small><b>${trained}/${(skw && (skw.diasEntreno || []).length) || 7}</b></span>
           <span class="wk-stat"><small>Pasos prom.</small><b>${steps != null ? fmt(steps) : '—'}</b>${stepsIncomplete(a, k) ? `<span class="inc-pill" title="Promedio parcial: faltan ${stepsIncomplete(a, k)} días por ingresar">Incompleto · ${weekStepsDays(a, k)}/7</span>` : ''}</span>
           ${k > 0 ? `<span class="wk-stat"><small>Cambio</small>${l != null ? `<span class="pill ${pillCls[status(a, k).key]}">${fmtS(l)}%</span>` : '<b>—</b>'}</span>` : ''}
         </div></div></td></tr>`;
@@ -2477,11 +2545,16 @@
   }
   function stageCard(a, s, i) {
     const p = `tracking.config.stages.${i}`, full = stageFull(s);
-    const opts = [['', 'Selecciona un objetivo'], ...(s.tipo && !ETAPAS.includes(s.tipo) ? [s.tipo] : []), ...ETAPAS];
+    const opts = [['', 'Sin determinar'], ...(s.tipo && !ETAPAS.includes(s.tipo) ? [s.tipo] : []), ...ETAPAS];
+    const col = collapsed.has(s.id), stt = stageState(s), cur = currentStage(a), isCur = !!cur && cur.s === s;
+    const pill = !s.tipo ? '<span class="pill">No se usa</span>'
+      : stt === 'now' ? '<span class="pill ok">En curso</span>' : stt === 'next' ? `<span class="pill${isCur ? ' gold' : ''}">Próxima</span>` : stt === 'done' ? '<span class="pill">Terminada</span>' : '<span class="pill warn">Sin fechas</span>';
+    const nObj = (s.objetivos || []).filter((x) => String(x || '').trim()).length;
+    const brief = !s.tipo ? '' : [stageFull(s) && num(s.objetivo) != null ? `${pctTxt(num(s.objetivo))} % / sem` : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`].filter(Boolean).join(' · ');
     const date = (k, label) => `<div class="field"><label for="st-${s.id}-${k}">${label}</label>${D(`${p}.${k}`, `st-${s.id}-${k}`)}</div>`;
-    const sub = stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : s.tipo ? 'Sin fechas: aún no se refleja en el registro' : 'Elige el objetivo de esta etapa';
+    const sub = !s.tipo ? 'Elige un objetivo para usar esta etapa' : stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas: aún no se refleja en el registro';
     let fields = '';
-    if (!s.tipo) fields = '<div class="callout small mt16">Selecciona un objetivo para configurar esta etapa.</div>';
+    if (!s.tipo) fields = '<div class="callout small mt16"><b>Etapa sin determinar.</b> No se usa en ninguna parte del proceso (calendario, registro, seguimiento, requerimientos ni documento), aunque tenga fechas. Elige un objetivo cuando quieras activarla.</div>';
     else if (!full) fields = '<div class="callout small mt16">Por configurar: los campos de esta etapa se definirán más adelante. Sus fechas ya se usan en el registro diario y el seguimiento semanal.</div>';
     else {
       const dly = a.tracking.daily || {}, w1 = stageDated(s) ? Object.keys(dly).filter((d) => d >= s.inicio && d < addDays(s.inicio, 7)).map((d) => num(dly[d].peso)).filter((v) => v != null) : [];
@@ -2500,22 +2573,27 @@
         </div>
         ${stageChartBlock(a, s, i)}`;
     }
-    return `<section class="card mt16 stage-card" id="stage-${s.id}">
-      <div class="card-head"><span class="sec-num" title="Etapa ${i + 1}">E${i + 1}</span><h3>${esc(s.tipo || 'Nueva etapa')}</h3><span class="sub">${sub}</span><span class="spacer"></span>
+    return `<section class="card mt16 stage-card${col ? ' is-col' : ''}${s.tipo ? '' : ' is-off'}" id="stage-${s.id}">
+      <div class="card-head stage-head" data-action="toggleStage" data-id="${s.id}">
+        <button type="button" class="wk-fold" aria-expanded="${!col}" aria-controls="stage-body-${s.id}" title="${col ? 'Mostrar' : 'Contraer'} la etapa" aria-label="${col ? 'Mostrar' : 'Contraer'} la etapa ${i + 1}">${ic(col ? 'chevR' : 'arrowDown', 14)}</button>
+        <span class="sec-num" title="Etapa ${i + 1}">E${i + 1}</span><h3>${esc(s.tipo || 'Sin determinar')}</h3>${pill}<span class="sub">${sub}${col && brief ? ` · ${brief}` : ''}</span><span class="spacer"></span>
         <button class="btn xs ghost danger" data-action="delStage" data-i="${i}" title="Eliminar etapa" aria-label="Eliminar etapa ${i + 1}">${ic('trash', 13)}</button></div>
-      <div class="card-body">
+      ${col ? '' : `<div class="card-body" id="stage-body-${s.id}">
         <div class="grid g3">${F('Objetivo', SEL(`${p}.tipo`, opts))}${date('inicio', 'Fecha inicial')}${date('fin', 'Fecha final')}</div>
-        ${stageObjetivos(s, i)}
+        ${s.tipo ? stageObjetivos(s, i) : ''}
         ${fields}
-      </div></section>`;
+      </div>`}</section>`;
   }
   // Configuración del proceso: va al inicio de Plan › Planificación.
   function processConfig(a) {
     const st = stagesOf(a), al = stageAlerts(a), N = weekCount(a), c0 = cfgOf(a).inicio, dated = st.some(stageDated);
     return `<div class="pf-block" id="config-proceso">
-      <div class="pf-block-head"><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas, objetivos y gráficos. Sus fechas arman el calendario del registro diario y del seguimiento semanal.</p></div>
+      <div class="pf-block-head row" style="justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap"><div><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas, objetivos y gráficos. Lo que definas aquí manda en el resto de la app.</p></div>
+        ${st.length ? (st.every((x) => collapsed.has(x.id))
+          ? `<button class="btn sm ghost" data-action="expandStages">${ic('arrowDown', 14)} Mostrar todas</button>`
+          : `<button class="btn sm ghost" data-action="collapseStages">${ic('arrowUp', 14)} Contraer todas</button>`) : ''}</div>
     ${al.length ? `<div class="callout alert-callout" role="alert"><b>Revisa las fechas de las etapas</b><ul class="alert-list">${al.map((x) => `<li>${x}</li>`).join('')}</ul>
-      ${mismatchWeeks(a).length ? '<button class="btn sm mt8" data-action="applyStageDates">Usar las fechas de las etapas en todas las semanas</button>' : ''}</div>` : ''}
+      <div class="row mt8" style="gap:8px;flex-wrap:wrap">${mismatchWeeks(a).length ? '<button class="btn sm" data-action="applyStageDates">Usar las fechas de las etapas en todas las semanas</button>' : ''}${manualBuscadoWeeks(a).length ? '<button class="btn sm" data-action="resetAllBuscado">Usar el objetivo de las etapas en todas las semanas</button>' : ''}</div></div>` : ''}
     <section class="card${al.length ? ' mt16' : ''}"><div class="card-head"><h3>Calendario del seguimiento</h3><span class="sub">${dated ? 'Se arma con las fechas de las etapas' : 'Define las fechas de una etapa para armarlo'}</span></div>
       <div class="card-body grid g3">
         ${F('Semana inicial', `<input class="input" value="${fmtDate(c0)}" disabled>`, 'Primer día de la primera etapa.')}
@@ -2524,7 +2602,17 @@
       </div></section>
     ${st.map((s, i) => stageCard(a, s, i)).join('')}
     <div class="row mt16"><button class="btn primary" data-action="addStage">${ic('plus', 15)} Agregar siguiente etapa</button></div>
-    <div class="callout mt16 small">Las fechas de cada etapa definen la etapa y el % buscado de cada semana en el registro diario y el seguimiento semanal de Seguimiento. Si allí marcas una semana con otra etapa, aparece una alerta para que revises cuál es la correcta. El número que manda es el % de cambio semanal del peso promedio: bajar más rápido que el objetivo no es mejor, en una etapa de definición se paga con músculo.</div></div>`;
+    <div class="callout mt16 small"><b>Qué manda cada dato de la etapa.</b>
+      <ul class="alert-list">
+        <li><b>Fechas:</b> arman el calendario del registro diario y del seguimiento semanal, y dicen a qué etapa pertenece cada semana.</li>
+        <li><b>Objetivo de pérdida (% semanal):</b> es el % buscado de cada semana de la etapa y, en la etapa vigente, el déficit de Requerimientos (y con él las kcal y los macros de cada tipo de día).</li>
+        <li><b>Objetivo de la etapa vigente:</b> fija el objetivo energético de Requerimientos (pérdida de grasa y mini cut → déficit; mantenimiento → mantenimiento; ganancia de masa muscular → volumen).</li>
+        <li><b>Días de entrenamiento:</b> definen el tipo de día (entrenamiento o descanso) del calendario de alimentación y las comidas de «Hambre» del registro diario.</li>
+        <li><b>Días de reporte de peso y meta de pasos:</b> son las metas que muestran el panel y el registro diario.</li>
+        <li><b>Peso inicial:</b> punto de partida de la trayectoria objetivo y del seguimiento.</li>
+        <li><b>Objetivos escritos:</b> salen en el documento que se descarga.</li>
+      </ul>
+      Una etapa «Sin determinar» o sin fechas no se usa. El número que manda en el seguimiento es el % de cambio semanal del peso promedio: bajar más rápido que el objetivo no es mejor, en una etapa de definición se paga con músculo.</div></div>`;
   }
 
 
@@ -2863,9 +2951,9 @@
   // ---- Planificación completa: 1) planificación de la etapa, 2) minuta ejemplo de cada tipo de día, 3) distribución de comidas, 4) resumen del seguimiento semanal ----
   // Meses del calendario de alimentación que tienen al menos un día asignado ('aaaa-mm'), y días por tipo en ellos.
   function calDocData(a) {
-    const days = Object.keys(a.calendar || {}).filter((d) => calType(a, d)).sort();
-    const months = [...new Set(days.map((d) => d.slice(0, 7)))];
-    const counts = {}; days.forEach((d) => { const id = a.calendar[d]; counts[id] = (counts[id] || 0) + 1; });
+    const days = planDays(a); // lo marcado a mano y lo que dan los días de entrenamiento de las etapas
+    const months = [...new Set(days.map(([d]) => d.slice(0, 7)))];
+    const counts = {}; days.forEach(([, dt]) => { counts[dt.id] = (counts[dt.id] || 0) + 1; });
     const grid = (ym) => { // semanas del mes (lunes a domingo) con la fecha ISO o null
       const [y, m] = ym.split('-').map(Number), lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate();
       const cells = Array(lead).fill(null).concat(Array.from({ length: nd }, (_, i) => `${ym}-${pad(i + 1)}`));
@@ -2881,7 +2969,7 @@
       .filter((x) => x.s.tipo && (stageDated(x.s) || x.objs.length)).map((x) => {
         const s = x.s, meta = [];
         if (stageFull(s)) {
-          if (num(s.objetivo) != null) meta.push(['Objetivo', `${String(+Math.abs(num(s.objetivo)).toFixed(2)).replace('.', ',')} % semanal de ${GAIN_TYPES.includes(s.tipo) ? 'aumento' : 'pérdida'}`]);
+          if (num(s.objetivo) != null) meta.push(['Objetivo', `${pctTxt(num(s.objetivo))} % semanal de ${GAIN_TYPES.includes(s.tipo) ? 'aumento' : 'pérdida'}`]);
           if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
           if (num(s.grasaInicial) != null) meta.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
           if (num(s.pasos) != null) meta.push(['Meta de pasos', fmt(num(s.pasos))]);
@@ -2904,8 +2992,8 @@
     const cd = calDocData(a);
     const calHtml = cd.months.length ? `<div class="pd-cal-legend">${a.dayTypes.filter((dt) => cd.counts[dt.id]).map((dt) => `<span><i style="background:${dayScheme(dt).light}">${esc(dtInitial(dt))}</i>${esc(dt.name)} <b>${cd.counts[dt.id]} ${cd.counts[dt.id] === 1 ? 'día' : 'días'}</b></span>`).join('')}</div>
       <div class="pd-cal">${cd.months.map((ym) => `<table class="pd-cal-m"><thead><tr><th colspan="7">${cd.label(ym)}</th></tr><tr>${DOW_L.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
-        ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = calType(a, d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
-      : '<p class="pd-empty">Aún no se han asignado días en el calendario de alimentación del Menú diario.</p>';
+        ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = planType(a, d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
+      : '<p class="pd-empty">Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.</p>';
     // 3 · Minuta ejemplo de cada tipo de día
     const minutas = a.dayTypes.map((dt, i) => {
       const pm = minutaMeals(dt);
@@ -3160,7 +3248,7 @@
     const calMonth = (ym) => ({ table: { widths: Array(7).fill('*'), body: [
         [{ text: cd.label(ym), colSpan: 7, bold: true, fontSize: 9, alignment: 'center', margin: [0, 1, 0, 2] }, {}, {}, {}, {}, {}, {}],
         DOW_L.map((l) => ({ text: l, fontSize: 6.5, bold: true, color: '#666', alignment: 'center' })),
-      ].concat(cd.grid(ym).map((w) => w.map((d) => { if (!d) return { text: '' }; const dt = calType(a, d);
+      ].concat(cd.grid(ym).map((w) => w.map((d) => { if (!d) return { text: '' }; const dt = planType(a, d);
         return dt ? { text: [{ text: String(+d.slice(8)) }, { text: ' ' + dtInitial(dt), fontSize: 5.5, bold: true }], fillColor: dayScheme(dt).light, alignment: 'center' } : { text: String(+d.slice(8)), color: '#555', alignment: 'center' }; }))) },
       layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#ddd', vLineColor: () => '#ddd', paddingLeft: () => 1, paddingRight: () => 1, paddingTop: () => 2, paddingBottom: () => 2 }, fontSize: 7.5 });
     const calPdf = [];
@@ -3172,7 +3260,7 @@
         while (row.length < 3) row.push({ width: '*', text: '' });
         calPdf.push({ columns: row, columnGap: 12, margin: [0, 0, 0, 12], unbreakable: true });
       }
-    } else calPdf.push(empty('Aún no se han asignado días en el calendario de alimentación del Menú diario.'));
+    } else calPdf.push(empty('Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'));
 
     // 3 · Minuta ejemplo de cada tipo de día
     const minutas = [];
@@ -3397,7 +3485,7 @@
     newAthlete() {
       promptModal('Nuevo atleta', F('Nombre y apellido', '<input class="input" id="m-name" placeholder="Ej.: Sebastián Muñoz">'), () => {
         const n = $('#m-name').value.trim() || 'Nuevo atleta';
-        const at = newAthlete(n); S.athletes.push(at); S.activeId = at.id; closeModal(); save(); go('cuestionario');
+        const at = newAthlete(n); at.req.stageLinked = true; S.athletes.push(at); S.activeId = at.id; closeModal(); save(); go('cuestionario');
       }, 'Crear');
     },
     switchAthlete(el) { S.activeId = el.dataset.id; closeModal(); commit(); },
@@ -3443,7 +3531,9 @@
 
     setEq(el, ev) { if (ev.target.closest('input')) return; A().req.ecuacion = el.dataset.id; commit(); },
     setFactor(el) { A().req.factor = parseFloat(el.dataset.v); commit(); },
-    setObj(el) { A().req.objetivo = el.dataset.v; commit(); },
+    setObj(el) { const a = A(); if (stageEnergy(a)) return; a.req.objetivo = el.dataset.v; commit(); },
+    reqAck() { A().req.stageLinked = true; commit(); },
+    reqKeepOld() { const a = A(), se = stageEnergy(a), old = num(a.req.pctDef); if (se && old != null) se.s.objetivo = old; a.req.stageLinked = true; toast('Objetivo de la etapa actualizado.'); commit(); },
     setVolUnit(el) { const r = A().req; if (r.volUnit === el.dataset.v) return; const p = num(r.pctVol); const k = 30.44 / 7; if (p != null) r.pctVol = Math.round((el.dataset.v === 'sem' ? p / k : p * k) * 1000) / 1000; r.volUnit = el.dataset.v; commit(); },
     useQ() {
       const a = A(), q = a.q, r = a.req;
@@ -3457,18 +3547,9 @@
     fcToday() { T.fcMonth = null; render(); },
     fcBrush(el) { T.fcBrush = el.dataset.id; render(); },
     fcFold() { fcFolded = !fcFolded; lsSet('prepcoach-calfold', fcFolded ? '1' : '0'); render(); },
-    fcFill() {
-      const a = A(), cal = calOf(a), { train, rest } = trainRest(a);
-      const st = stagesOf(a).filter((s) => stageDated(s) && (s.diasEntreno || []).length);
-      if (!st.length) { toast('Primero marca los días de entrenamiento de la etapa en Plan › Planificación.'); return; }
-      let n = 0;
-      st.forEach((s) => { for (let d = s.inicio; d <= s.fin; d = addDays(d, 1)) if (!calType(a, d)) { cal[d] = s.diasEntreno.includes(dow(d)) ? train.id : rest.id; n++; } });
-      toast(n ? `${n} ${n === 1 ? 'día asignado' : 'días asignados'} según los días de entrenamiento de las etapas.` : 'No había días sin asignar dentro de las etapas.');
-      commit();
-    },
     fcClear() {
       const a = A(), ym = fcMonth(), cal = calOf(a), ks = Object.keys(cal).filter((d) => d.startsWith(`${ym}-`)), mn = `${CAL_M[+ym.slice(5) - 1].toLowerCase()} de ${ym.slice(0, 4)}`;
-      confirmModal('Vaciar mes', `Se quitará el tipo de día de los <b>${ks.length}</b> días asignados en ${mn}. Los demás meses no cambian.`, () => { ks.forEach((d) => { delete cal[d]; }); closeModal(); commit(); }, 'Vaciar');
+      confirmModal('Quitar marcas del mes', `Se quitarán los <b>${ks.length}</b> días marcados a mano en ${mn}: volverán a lo que definan las etapas. Los demás meses no cambian.`, () => { ks.forEach((d) => { delete cal[d]; }); closeModal(); commit(); }, 'Quitar');
     },
     addDayType() {
       promptModal('Nuevo tipo de día', `${F('Nombre', '<input class="input" id="m-name" placeholder="Ej.: Recarga, Día alto, Competencia">')}
@@ -3603,6 +3684,12 @@
     calNav(el) { if (!CAL) return; const d = new Date(CAL.y, CAL.m + +el.dataset.d, 1); CAL.y = d.getFullYear(); CAL.m = d.getMonth(); calDraw(); },
     calPick(el) { if (!CAL) return; setP(CAL.path, el.dataset.v || ''); CAL = null; calDraw(); commit(); },
     calClose() { CAL = null; calDraw(); },
+    toggleStage(el, ev) {
+      if (ev && ev.target && ev.target.closest && ev.target.closest('[data-action="delStage"], input, select, textarea')) return;
+      const id = el.dataset.id; if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id); saveCollapsed(); render();
+    },
+    collapseStages() { stagesOf(A()).forEach((x) => collapsed.add(x.id)); saveCollapsed(); render(); },
+    expandStages() { stagesOf(A()).forEach((x) => collapsed.delete(x.id)); saveCollapsed(); render(); },
     toggleMeal(el, ev) { if (ev && ev.target && ev.target.closest && ev.target.closest('input, textarea, select')) return; const id = el.dataset.id; collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); saveCollapsed(); render(); },
     collapseAll() { activeDay(A()).meals.forEach((m) => collapsed.add(m.id)); saveCollapsed(); render(); },
     expandAll() { activeDay(A()).meals.forEach((m) => collapsed.delete(m.id)); saveCollapsed(); render(); },
@@ -3702,6 +3789,12 @@
     },
     foldWeek(el) { const a = A(), k = +el.dataset.k; wkFold[k] = !isFolded(a, k); lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); },
     toggleDailyCol(el) { dailyShow[el.dataset.g] = el.checked; lsSet('prepcoach-dailycols', JSON.stringify(dailyShow)); render(); },
+    resetAllBuscado() {
+      const a = A(), mb = manualBuscadoWeeks(a);
+      confirmModal('Usar el objetivo de las etapas', `Se quitará el % buscado manual de <b>${mb.length}</b> ${mb.length === 1 ? 'semana' : 'semanas'}: usarán el objetivo de su etapa.`, () => {
+        mb.forEach((x) => { delete a.tracking.weeks[x.k].buscado; }); closeModal(); commit();
+      }, 'Usar el de las etapas');
+    },
     resetBuscado(el) { const w = A().tracking.weeks[el.dataset.k]; if (w) delete w.buscado; commit(); },
     fillMacros(el) {
       const a = A(), k = el.dataset.k, rc = reqCalc(a);

@@ -1581,3 +1581,19 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 
 /* Objetivos dentro de cada etapa */
 .stage-objs { padding-top: 14px; border-top: 1px dashed var(--border); }
+
+/* Etapas: mostrar / contraer, estado y etapa sin determinar */
+.stage-head { cursor: pointer; gap: 10px; flex-wrap: wrap; }
+.stage-card.is-col .card-head { border-bottom: 0; }
+.stage-card.is-off { opacity: .78; }
+.stage-card.is-off h3 { color: var(--text-2); }
+
+/* Requerimientos: objetivo energético definido por la etapa vigente */
+.seg.locked button { cursor: default; }
+.seg.locked button:not(.active) { opacity: .45; }
+.req-stage-note { margin: 14px 18px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; color: var(--text-2); background: var(--accent-soft); border: 1px solid rgb(var(--accent-rgb) / .28); }
+.req-stage-note a { color: var(--accent-text, var(--accent)); font-weight: 600; }
+.req-stage-alert { margin: 10px 18px 0; }
+
+/* Calendario de alimentación: día que viene de la etapa (no marcado a mano) */
+.fc-day.on.auto { border-style: dashed; background: color-mix(in srgb, var(--dc) 15%, var(--surface)); }
