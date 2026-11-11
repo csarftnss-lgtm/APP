@@ -2160,14 +2160,35 @@
     const dly = a.tracking.daily || {}, vals = Object.keys(dly).filter((d) => d >= s.inicio && d <= s.fin).map((d) => fn(dly[d] || {})).filter((v) => v != null && isFinite(v));
     return { avg: vals.length ? mean(vals) : null, n: vals.length };
   }
+  // Etapa que se consulta en Seguimiento: la misma para el Panel, el Registro diario y el Seguimiento semanal (a.ui.panelStage).
+  // Devuelve las etapas con fechas, la elegida (por defecto la vigente) y sus semanas. Con withNone, también las semanas
+  // del registro que no pertenecen a ninguna etapa, para que sus datos no queden ocultos.
+  function trackScope(a, withNone) {
+    const dated = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s)), N = weekCount(a);
+    const all = Array.from({ length: N + 1 }, (_, k) => k), orphan = dated.length ? all.filter((k) => !stageOfWeek(a, k)) : [];
+    if (!dated.length) return { dated, orphan, sel: null, none: false, ks: all };
+    if (withNone && a.ui.panelStage === '__none' && orphan.length) return { dated, orphan, sel: null, none: true, ks: orphan };
+    const sel = dated.find((x) => x.s.id === a.ui.panelStage) || currentStage(a) || dated[0];
+    return { dated, orphan, sel, none: false, ks: stageWeeks(a, sel.s) };
+  }
+  const STAGE_ST = { now: 'en curso', next: 'próxima', done: 'terminada' };
+  function stageSelect(a, sc, withNone) {
+    if (!sc.dated.length) return '';
+    return `<div class="row"><span class="label">Etapa a consultar</span>
+      <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar" style="width:auto;min-width:260px;max-width:100%">${sc.dated.map((x) => `<option value="${x.s.id}" ${sc.sel && x.s === sc.sel.s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${STAGE_ST[stageState(x.s)]})</option>`).join('')}
+        ${withNone && sc.orphan.length ? `<option value="__none" ${sc.none ? 'selected' : ''}>Sin etapa · ${sc.orphan.length} ${sc.orphan.length === 1 ? 'semana' : 'semanas'}</option>` : ''}</select></div>`;
+  }
+  // Nombre de una semana dentro de la etapa consultada: «Semana 3» y, en chico, su número en el registro.
+  const scopeWeek = (sc, k, j) => (sc.sel ? `Semana ${j + 1}` : weekLabel(k));
+  const scopeWeekSub = (sc, k) => (sc.sel ? `${weekLabel(k).toLowerCase()} del registro` : '');
+  const noStagesNote = (a, sc) => (sc.dated.length || isClientView() ? '' : `<div class="callout small" style="margin-bottom:12px">Aún no hay etapas con objetivo y fechas: se muestran todas las semanas. Defínelas en <a href="#/plan/planif">Plan › Planificación</a> para consultar el seguimiento por etapa.</div>`);
   // Panel del seguimiento: se consulta por etapa (las de Plan › Planificación, con sus fechas).
   function segPanel(a) {
     const dated = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s));
     if (!dated.length) return `<div class="card empty"><div class="e-ic">${ic('target', 30)}</div><h2>Aún no hay etapas con objetivo y fechas</h2>
       <p>El panel se consulta por etapa. ${isClientView() ? 'Tu coach definirá las etapas del proceso.' : 'Define el objetivo y las fechas de una etapa en <a href="#/plan/planif">Plan › Planificación</a>.'}</p></div>`;
-    const sel = dated.find((x) => x.s.id === a.ui.panelStage) || currentStage(a) || dated[0];
-    const s = sel.s, ks = stageWeeks(a, s), cw = currentWeek(a), stt = stageState(s), tg = stageTarget(s);
-    const stTxt = { now: 'en curso', next: 'próxima', done: 'terminada' };
+    const sc = trackScope(a, false), sel = sc.sel;
+    const s = sel.s, ks = sc.ks, cw = currentWeek(a), stt = stageState(s), tg = stageTarget(s);
     // Semana de referencia: la más reciente de la etapa que ya tiene pesajes (si no, la actual o la primera).
     const past = ks.filter((k) => k <= cw), withW = past.filter((k) => weekWeights(a, k).length);
     const kRef = withW.length ? withW[withW.length - 1] : past.length ? past[past.length - 1] : ks[0];
@@ -2203,8 +2224,7 @@
     return `
     <div class="row" style="justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap">
       <div class="muted">Selecciona una etapa para consultar su progreso, compararlo con su objetivo y revisar su evolución.</div>
-      <div class="row"><span class="label">Etapa a consultar</span>
-        <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar" style="width:auto;min-width:260px;max-width:100%">${dated.map((x) => `<option value="${x.s.id}" ${x.s === s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${stTxt[stageState(x.s)]})</option>`).join('')}</select></div>
+      ${stageSelect(a, sc, false)}
     </div>
     <section class="card status-hero">
       <div><div class="k-label label">CÓMO VA LA ETAPA · SEMANA ${ks.indexOf(kRef) + 1} DE ${ks.length}</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
@@ -2353,14 +2373,16 @@
     const entry = (path, unit) => `<div class="entry-wrap">${I(path, { cls: 'entry', num: true, live: true, ph: '—', attrs: `aria-label="${unit}"` })}<span>${unit}</span></div>`;
     const numCell = (d, f, label) => `<td class="pad0 m-td">${I(`tracking.daily.${d}.${f}`, { cls: 'cell', num: true, live: true, ph: '—', attrs: `aria-label="${esc(label)}"` })}</td>`;
     const nCols = 5 + (sh.esc ? SCALES.length : 0) + (sh.ham ? meals.idx.length : 0) + (sh.pl ? SKINFOLDS.length + 1 : 0) + (sh.per ? PERIMS.length + 1 : 0);
+    const sc = trackScope(a, true), cwk = currentWeek(a); // semanas de la etapa que se consulta
     let rows = '';
-    for (let k = 0; k <= N; k++) {
+    for (let j = 0; j < sc.ks.length; j++) {
+      const k = sc.ks[j];
       const days = weekDays(a, k), avg = weekAvg(a, k), n = weekWeights(a, k).length, steps = weekSteps(a, k);
       const l = k > 0 ? logrado(a, k) : null, folded = isFolded(a, k);
       const trained = days.filter((d) => dailyOf(a, d).entreno === 'si').length, skw = stageOfWeek(a, k); // metas de pesajes y entrenos: las de la etapa
       rows += `<tr class="week-row" id="wk-${k}"><td colspan="${nCols}"><div class="wk-head">
         <div class="wk-title"><button type="button" class="wk-fold" data-action="foldWeek" data-k="${k}" aria-expanded="${!folded}" title="${folded ? 'Mostrar' : 'Ocultar'} los días de esta semana">${ic(folded ? 'chevR' : 'arrowDown', 14)}</button>
-          <b>${weekLabel(k)}</b><span>${fmtDate(days[0])} – ${fmtDate(days[6])}${k === 0 ? ' · peso de partida' : ''}</span><span class="wk-etapa">${etapaCell(a, k, 'cell wk-etapa-sel')}</span></div>
+          <b>${scopeWeek(sc, k, j)}</b><span>${fmtDate(days[0])} – ${fmtDate(days[6])}${scopeWeekSub(sc, k) ? ` · ${scopeWeekSub(sc, k)}` : ''}${k === 0 ? ' · peso de partida' : ''}</span><span class="wk-etapa">${etapaCell(a, k, 'cell wk-etapa-sel')}</span></div>
         <div class="wk-stats">
           <span class="wk-stat"><small>Promedio</small><b>${avg != null ? fmt(avg, 2) + ' kg' : '—'}</b></span>
           <span class="wk-stat"><small>Pesajes</small><b>${n}/${(skw && (skw.diasPeso || []).length) || 7}</b></span>
@@ -2384,10 +2406,14 @@
       }).join('');
     }
     const grp = (on, span, label) => (on ? `<th colspan="${span}" class="g-start">${label}</th>` : '');
-    return `${mismatchCallout(a)}
+    return `${mismatchCallout(a)}${noStagesNote(a, sc)}
+    <div class="row seg-scope" style="justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)}).` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
+      ${stageSelect(a, sc, true)}
+    </div>
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
       <div class="muted">Peso en ayunas, después de ir al baño y sin tomar agua. Escalas, hambre, pliegues y perímetros se anotan el día que se miden; el seguimiento semanal muestra sus promedios. En «Hambre» aparecen las comidas del tipo de día de cada fila: Entrenamiento si en «Entreno» marcas Sí, Descanso si marcas No; sin anotar, se usan los días de entrenamiento de la etapa. Un día en blanco no rompe nada.</div>
-      <button class="btn sm" data-action="goToday">Ir a la semana actual</button>
+      <button class="btn sm" data-action="goToday">${sc.ks.includes(cwk) ? 'Ir a la semana actual' : 'Ir a la etapa y semana actual'}</button>
     </div>
     <div class="col-toggles" role="group" aria-label="Columnas visibles">
       <span class="label">Mostrar columnas</span>
@@ -2440,12 +2466,14 @@
         ${own != null ? `<button type="button" class="busc-tag manual" data-action="resetBuscado" data-k="${k}" title="Ajuste manual de esta semana. Toca para volver al valor de la etapa (${cfgV != null ? fmtS(cfgV) + '%' : '—'})">Manual ↺</button>` : `<span class="busc-tag" title="Valor de la etapa (Plan › Planificación)">Etapa</span>`}</td>`;
     };
     const roText = (v) => `<td class="computed small" style="white-space:pre-wrap;min-width:170px">${v ? esc(v) : '<span class="muted">—</span>'}</td>`;
+    const sc = trackScope(a, true); // semanas de la etapa que se consulta
     let body = '';
-    for (let k = 0; k <= N; k++) {
+    for (let j = 0; j < sc.ks.length; j++) {
+      const k = sc.ks[j];
       const w = wk(a, k), avg = weekAvg(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
       const hasDailySteps = weekDays(a, k).some((d) => num(dailyOf(a, d).pasos) != null);
       body += `<tr class="${k === cw ? 'today' : ''}">
-        <td class="lbl sticky-col">${weekLabel(k)}</td>
+        <td class="lbl sticky-col">${scopeWeek(sc, k, j)}${scopeWeekSub(sc, k) ? `<div class="small muted" style="font-weight:400">${scopeWeekSub(sc, k)}</div>` : ''}</td>
         <td class="nowrap">${fmtDate(weekStart(a, k))}</td><td>${dayName(weekStart(a, k))}</td>
         <td class="${ro ? 'computed nowrap' : 'pad0'}${etapaMismatch(a, k) ? ' etapa-warn' : ''}" style="min-width:${ro ? 0 : 190}px">${etapaCell(a, k, 'cell', true)}</td>
         <td class="num computed"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td>
@@ -2460,7 +2488,11 @@
       </tr>`;
     }
     if (snap) save(); // deja registrada la copia de la semana actual
-    return `${mismatchCallout(a)}
+    return `${mismatchCallout(a)}${noStagesNote(a, sc)}
+    <div class="row seg-scope" style="justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
+      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)}).` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
+      ${stageSelect(a, sc, true)}
+    </div>
     <div class="muted" style="margin-bottom:6px">Peso y % logrado se calculan desde el registro diario. Si no hay pasos diarios registrados, puedes ingresar el promedio semanal a mano. El % buscado vacío toma el valor de la configuración.</div>
     <div class="muted" style="margin-bottom:12px">Escalas y hambre son el <b>promedio de los días anotados</b> en el Registro diario. Si a la semana le faltan días, el promedio lleva <span class="inc-mini">4/7</span> (días con dato de 7).</div>
     <div class="table-wrap week-table-wrap">
@@ -3928,9 +3960,11 @@
     openDrawer() { openDrawer(); },
     closeDrawer() { closeDrawer(); },
     goToday() {
-      const k = currentWeek(A());
+      const a = A(), k = currentWeek(a);
+      // Si la semana actual no está en la etapa que se consulta, se pasa a la etapa (o a «Sin etapa») que la contiene.
+      if (!trackScope(a, true).ks.includes(k)) { const st = stageOfWeek(a, k); a.ui.panelStage = st ? st.id : '__none'; save(); render(); }
       if (isFolded(A(), k)) { wkFold[k] = false; lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); }
-      document.getElementById(`wk-${k}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setTimeout(() => document.getElementById(`wk-${k}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30);
     },
     foldWeek(el) { const a = A(), k = +el.dataset.k; wkFold[k] = !isFolded(a, k); lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); },
     toggleDailyCol(el) { dailyShow[el.dataset.g] = el.checked; lsSet('prepcoach-dailycols', JSON.stringify(dailyShow)); render(); },
