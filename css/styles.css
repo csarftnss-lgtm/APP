@@ -1602,3 +1602,22 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .req-table td.lbl { white-space: nowrap; font-weight: 600; }
 .req-table .cell { min-width: 86px; }
 .stage-reqs .hint a, .callout a { color: var(--accent-text, var(--accent)); font-weight: 600; }
+
+/* Distribución de comidas: comida de ejemplo traída del Menú diario */
+.dm-ex { display: grid; gap: 8px; justify-items: start; margin-top: 8px; width: 100%; }
+.dm-ex-foods { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 18px; font-size: 13px; color: var(--text-2); }
+.dm-ex-foods li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); min-width: 0; }
+.dm-ex-foods li span { min-width: 0; overflow-wrap: anywhere; }
+.dm-ex-foods li b { color: var(--text); font-weight: 600; white-space: nowrap; }
+.dm-ex-tot { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ex-list { display: grid; gap: 8px; }
+.ex-opt { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-2); background: var(--bg-2); color: inherit; font: inherit; cursor: pointer; }
+.ex-opt:hover { border-color: var(--accent); }
+.ex-opt.on { border-color: var(--accent); background: var(--accent-soft); }
+.ex-opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ex-thumb { flex: none; width: 64px; height: 64px; border-radius: 9px; overflow: hidden; display: grid; place-items: center; background: var(--surface-3); color: var(--muted); }
+.ex-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ex-body { display: grid; gap: 3px; min-width: 0; }
+.ex-title { font-weight: 600; color: var(--text); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ex-sub { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ex-foods { font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }

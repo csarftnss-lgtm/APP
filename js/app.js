@@ -1730,13 +1730,13 @@
   }
   function activeDay(a) { return a.dayTypes.find((d) => d.id === a.activeDay) || a.dayTypes[0]; }
 
-  function targetTiles(t, peso, totals) {
+  function targetTiles(t, peso, totals, totLabel = 'Menú') {
     const items = [['Energía', 'kcal', t.kcal, totals?.kcal, 'var(--c-kcal)', null], ['Proteínas', 'g', t.p, totals?.p, 'var(--c-p)', 4], ['Carbohidratos', 'g', t.c, totals?.c, 'var(--c-c)', 4], ['Grasas', 'g', t.g, totals?.g, 'var(--c-g)', 9]];
     const SHORT = { 'Energía': 'Kcal', 'Proteínas': 'Prot.', Carbohidratos: 'Carbs', Grasas: 'Grasas' }; // etiqueta corta para la barra fija en el móvil
     return `<div class="target-grid">${items.map(([l, u, v, tot, c, k]) => `<div class="target" style="--c:${c}">
       <div class="t-l"><span class="tl-full">${l}</span><span class="tl-short">${SHORT[l]}</span></div><div class="t-v">${fmt(v)}<small> ${u}</small></div>
       <div class="t-s">${k ? `${peso && v != null ? fmt(v / peso, 2) + ' g/kg · ' : ''}${t.kcal && v != null ? fmt((v * k / t.kcal) * 100) + '%' : ''}` : 'objetivo diario'}</div>
-      ${totals ? `<div class="progress"><span style="width:${clamp(adq(tot, v) || 0, 0, 100)}%"></span></div><div class="t-s mt8">Menú: <b>${fmt(tot)}</b> ${u} · <span class="${adqCls(adq(tot, v))}">${fmt(adq(tot, v))}%</span></div>` : ''}
+      ${totals ? `<div class="progress"><span style="width:${clamp(adq(tot, v) || 0, 0, 100)}%"></span></div><div class="t-s mt8">${totLabel}: <b>${fmt(tot)}</b> ${u} · <span class="${adqCls(adq(tot, v))}">${fmt(adq(tot, v))}%</span></div>` : ''}
     </div>`).join('')}</div>`;
   }
 
@@ -1873,24 +1873,62 @@
     const t = (o) => String((o && o.title) || '').trim();
     return t(m.options[m.sel || 0]) || t(m.options.find((o) => t(o))) || '';
   }
+  // Comida de ejemplo de un tiempo de comida (Distribución): la opción del Menú diario que se trajo (m.ej = id de la opción)
+  // o, mientras no se elija, la principal (★).
+  function exIndex(m) {
+    const k = m.ej ? m.options.findIndex((o) => o.id === m.ej) : -1;
+    return k >= 0 ? k : clamp(m.sel || 0, 0, Math.max(0, m.options.length - 1));
+  }
+  const exOpt = (m) => m.options[exIndex(m)] || null;
+  const optFoods = (o) => ((o && o.foods) || []).filter((l) => l.foodId || String(l.foodName || '').trim())
+    .map((l) => { const x = lineCalc(l); return [x.f ? x.f.name : String(l.foodName || ''), String(l.cantidad || '').trim()]; });
+  const optMacros = (o) => { const t = optTotals(o); return `${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g`; };
+  // Total del día de ejemplo: suma de la comida de ejemplo de cada tiempo de comida.
+  function exTotals(dt) {
+    const t = { kcal: 0, p: 0, c: 0, g: 0 };
+    dt.meals.forEach((m) => { const x = optTotals(exOpt(m)); t.kcal += x.kcal; t.p += x.p; t.c += x.c; t.g += x.g; });
+    return t;
+  }
+  // Ventana para traer a un tiempo de comida una de sus opciones del Menú diario.
+  function examplePicker(dt, mi) {
+    const m = dt.meals[mi], cur = exIndex(m), tm = m.name || `Comida ${mi + 1}`;
+    const rows = m.options.map((o, k) => {
+      const foods = optFoods(o), title = String(o.title || '').trim() || `Opción ${k + 1}`;
+      return `<button type="button" class="ex-opt${k === cur ? ' on' : ''}" data-action="setExample" data-i="${mi}" data-k="${k}" aria-pressed="${k === cur}">
+        <span class="ex-thumb">${o.image ? `<img src="${imgSrc(o.image)}" alt="" loading="lazy">` : ic('image', 18)}</span>
+        <span class="ex-body"><span class="ex-title">${esc(title)} ${k === (m.sel || 0) ? '<span class="pill gold">★ Principal</span>' : ''}${k === cur ? '<span class="pill ok">En el ejemplo</span>' : ''}</span>
+          <span class="ex-sub">Opción ${k + 1} · ${foods.length ? optMacros(o) : 'sin alimentos todavía'}</span>
+          ${foods.length ? `<span class="ex-foods">${foods.map(([n, c]) => esc(c ? `${n} (${c})` : n)).join(' · ')}</span>` : ''}</span>
+      </button>`;
+    }).join('');
+    return `<div class="modal-head"><h3>Traer comida · ${esc(tm)}</h3></div>
+      <div class="modal-body"><div class="muted small" style="margin-bottom:10px">Elige cuál de las opciones de «${esc(tm)}» del Menú diario se muestra como ejemplo del día. No cambia el menú ni su opción principal (★).</div>
+        <div class="ex-list">${rows || '<div class="muted">Este tiempo de comida aún no tiene opciones en el Menú diario.</div>'}</div></div>
+      <div class="modal-foot"><button class="btn ghost" data-action="openMealInMenu" data-id="${m.id}">${ic('menu', 14)} Crear o editar opciones en el Menú diario</button><span class="spacer"></span><button class="btn" data-action="closeModal">Cerrar</button></div>`;
+  }
   function viewDist() {
     const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = dayTargets(a, dt);
-    // Lista de comidas: nombre, imagen de la opción principal (★) del menú, hora e indicaciones para el atleta.
-    const mealImg = (m) => { const o = m.options[m.sel || 0]; return (o && o.image) || (m.options.find((x) => x.image) || {}).image || null; };
-    const n = dt.meals.length;
+    // Lista de tiempos de comida (los mismos del Menú diario): comida de ejemplo traída del menú, hora e indicaciones para el atleta.
+    const mealImg = (m) => { const o = exOpt(m); return (o && o.image) || null; };
+    const n = dt.meals.length, ex = exTotals(dt);
     const items = dt.meals.map((m, i) => {
       const base = `dayTypes.${di}.meals.${i}`, img = mealImg(m), nm = esc(m.name || `Comida ${i + 1}`);
       // «Traer nombre del menú»: copia al nombre la descripción que tiene la opción principal (★) en el Menú diario.
       // Tiempo de comida (m.name: Desayuno, Almuerzo…) y nombre de la comida (descripción de la opción ★ del Menú diario), enlazados.
-      const si = clamp(m.sel || 0, 0, Math.max(0, m.options.length - 1)), dish = (m.options[si] && m.options[si].title) || '';
+      const si = exIndex(m), eo = m.options[si], dish = (eo && eo.title) || '', foods = optFoods(eo), nOpt = m.options.length;
       // El nombre ocupa todo el ancho del recuadro y crece hacia abajo si es largo, para que siempre se lea completo.
       return `<article class="card dm-item">
         <div class="dm-name"><span class="meal-idx">${pad(i + 1)}</span>
           <div class="dm-names">
             <label class="dm-lab" for="dm-tm-${i}">Tiempo de comida</label>
             <div class="dm-name-wrap" data-v="${esc(m.name || '')}"><textarea class="input" id="dm-tm-${i}" rows="1" data-bind="${base}.name" data-live data-oneline placeholder="Ej.: Desayuno" aria-label="Tiempo de comida ${i + 1}">${esc(m.name || '')}</textarea></div>
-            ${m.options.length ? `<label class="dm-lab" for="dm-dish-${i}">Nombre de la comida <span class="muted">· opción ★ del Menú diario</span></label>
-            <div class="dm-name-wrap dm-dish" data-v="${esc(dish)}"><textarea class="input" id="dm-dish-${i}" rows="1" data-bind="${base}.options.${si}.title" data-live data-oneline placeholder="Ej.: Avena con yogur, plátano y pan con huevo" aria-label="Nombre de la comida ${i + 1}">${esc(dish)}</textarea></div>` : ''}
+            ${nOpt ? `<label class="dm-lab" for="dm-dish-${i}">Comida de ejemplo <span class="muted">· opción ${si + 1} de ${nOpt} del Menú diario${si === (m.sel || 0) ? ' (★ principal)' : ''}</span></label>
+            <div class="dm-name-wrap dm-dish" data-v="${esc(dish)}"><textarea class="input" id="dm-dish-${i}" rows="1" data-bind="${base}.options.${si}.title" data-live data-oneline placeholder="Ej.: Avena con yogur, plátano y pan con huevo" aria-label="Nombre de la comida de ejemplo ${i + 1}">${esc(dish)}</textarea></div>
+            <div class="dm-ex">
+              ${foods.length ? `<ul class="dm-ex-foods">${foods.map(([fn, c]) => `<li><span>${esc(fn)}</span>${c ? `<b>${esc(c)}</b>` : ''}</li>`).join('')}</ul><div class="dm-ex-tot">${optMacros(eo)}</div>`
+                : '<div class="muted small">Esta opción aún no tiene alimentos en el Menú diario.</div>'}
+              <button type="button" class="btn sm" data-action="pickExample" data-i="${i}">${ic('menu', 14)} Traer comida del menú${nOpt > 1 ? ` <span class="muted">· ${nOpt} opciones</span>` : ''}</button>
+            </div>` : `<div class="dm-ex"><div class="muted small">Sin opciones en el Menú diario.</div><button type="button" class="btn sm" data-action="openMealInMenu" data-id="${m.id}">${ic('menu', 14)} Crear la comida en el Menú diario</button></div>`}
           </div></div>
         <div class="dm-left">
           <button type="button" class="dm-img${img ? ' has' : ''}" data-action="openMealInMenu" data-id="${m.id}" title="${img ? 'Ver esta comida en el Menú diario' : 'Agregar la imagen en el Menú diario'}">
@@ -1919,9 +1957,10 @@
       </div>`;
     return `
     ${daySeg(a)}
-    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso)}</div>` : (reqMissing(a, dt) || '<div class="callout">Faltan los requerimientos de la etapa para ver las calorías y los macros del día.</div>')}
+    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso, ex, 'Ejemplo')}</div>` : (reqMissing(a, dt) || '<div class="callout">Faltan los requerimientos de la etapa para ver las calorías y los macros del día.</div>')}
+    ${t.ok ? '' : `<div class="callout small" style="margin-bottom:12px"><b>Día de ejemplo:</b> ${fmt(ex.kcal)} kcal · P ${fmt(ex.p)} g · C ${fmt(ex.c)} g · G ${fmt(ex.g)} g</div>`}
     <div class="dm-head">
-      <div><h3>Distribución de comidas diarias · ${esc(dt.name)}</h3><div class="sub">${n} ${n === 1 ? 'comida' : 'comidas'} · la imagen es la de la opción principal (★) del Menú diario</div></div>
+      <div><h3>Distribución de comidas diarias · ${esc(dt.name)}</h3><div class="sub">${n} ${n === 1 ? 'tiempo de comida' : 'tiempos de comida'} · son los mismos del Menú diario: lo que cambies aquí (nombre, hora, orden) cambia también allá. En cada uno puedes traer la comida del menú que quieras mostrar como ejemplo del día.</div></div>
       <span class="spacer"></span>
       <button class="btn primary sm" data-action="addMeal">${ic('plus', 14)} Agregar comida</button>
     </div>
@@ -2919,7 +2958,7 @@
     .pd-kv span{display:block;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8a6a1f;font-weight:700;margin-bottom:2px}.pd-kv b{font-size:13px}
     .pd-sub{font-size:13px;margin:0 0 6px}.pd-goals{margin:0;padding-left:22px;font-size:12px}.pd-goals li{margin-bottom:6px;padding-left:2px}
     .pd-empty{font-size:11.5px;color:#666;font-style:italic;margin:0 0 6px}.pd-mute{color:#999}
-    .pd-dist{table-layout:fixed}.pd-dist th,.pd-dist td{text-align:left;vertical-align:top;padding:5px 6px;overflow-wrap:anywhere}.pd-dist th:first-child{width:30px}.pd-dist th:nth-child(2){width:32%}.pd-dist th:nth-child(3){width:64px}.pd-dist td:first-child{color:#666}.pd-dist td:nth-child(3){white-space:nowrap}
+    .pd-dist{table-layout:fixed}.pd-dist th,.pd-dist td{text-align:left;vertical-align:top;padding:5px 6px;overflow-wrap:anywhere}.pd-dist th:first-child{width:30px}.pd-dist th:nth-child(2){width:17%}.pd-dist th:nth-child(3){width:52px}.pd-dist th:nth-child(4){width:36%}.pd-ex{font-size:10.5px;color:#444;margin-top:2px}.pd-dist td:first-child{color:#666}.pd-dist td:nth-child(3){white-space:nowrap}
     .pd-note{font-size:11.5px;color:#222;border:1px solid #e6d9b8;background:#faf6ec;border-radius:4px;padding:8px 10px;margin-top:8px;break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-stats{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:11.5px;margin-bottom:10px}
     .pd-scroll{overflow-x:auto}.pd-wk{min-width:600px;font-size:10px}.pd-wk th,.pd-wk td{padding:3px 4px}.pd-wk th{vertical-align:bottom}.pd-wk td{white-space:nowrap}.pd-wk th:nth-child(3),.pd-wk td:nth-child(3){text-align:left}
@@ -3051,9 +3090,11 @@
       const t = dayTargets(a, dt);
       return `<div class="pd-day"><div class="pm-head"><div><div class="pm-eyebrow">Distribución de comidas</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
         ${t.ok ? `<div class="pm-targets">Objetivo del día: <b>${fmt(t.kcal)} kcal</b><br>Proteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g</div>` : ''}</div>
-        ${dt.meals.length ? `<table class="pd-dist"><thead><tr><th>#</th><th>Comida</th><th>Hora</th><th>Indicaciones</th></tr></thead><tbody>
-          ${dt.meals.map((m, i) => `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`).join('')}
-        </tbody></table>` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
+        ${dt.meals.length ? `<table class="pd-dist"><thead><tr><th>#</th><th>Tiempo de comida</th><th>Hora</th><th>Comida de ejemplo</th><th>Indicaciones</th></tr></thead><tbody>
+          ${dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = String((eo && eo.title) || '').trim();
+            return `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${et || ef.length ? `${et ? `<b>${esc(et)}</b>` : ''}${ef.length ? `<div class="pd-ex">${ef.map(([fn, c]) => esc(c ? `${fn} (${c})` : fn)).join(' · ')}</div>` : ''}` : '<span class="pd-mute">—</span>'}</td><td>${String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`; }).join('')}
+        </tbody></table>
+        <p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) })}</b></p>` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
     }).join('');
     const noteOf = (k) => String((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
     const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).map(([k, l]) => `<div class="pd-note"><b>${l}.</b> ${nl(noteOf(k))}</div>`).join('');
@@ -3330,7 +3371,11 @@
     a.dayTypes.forEach((dt) => {
       const t = dayTargets(a, dt);
       dist.push({ unbreakable: dt.meals.length <= 12, margin: [0, 0, 0, 16], stack: dayHead('Distribución de comidas', dt.name, t.ok ? `Objetivo del día: ${fmt(t.kcal)} kcal\nProteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g` : '').concat(dt.meals.length
-        ? [{ table: { headerRows: 1, widths: [16, 150, 38, '*'], body: [[th('#'), th('Comida'), th('Hora'), th('Indicaciones')]].concat(dt.meals.map((m, i) => [{ text: pad(i + 1), color: '#666' }, { text: str(m.name) || `Comida ${i + 1}`, bold: true }, str(m.time) || '—', str(m.indic).trim() ? str(m.indic).trim() : { text: '—', color: '#999' }])) }, layout: Object.assign({}, lines, { paddingTop: () => 4, paddingBottom: () => 4 }), fontSize: 8.5 }]
+        ? [{ table: { headerRows: 1, widths: [16, 84, 30, 180, '*'], body: [[th('#'), th('Tiempo de comida'), th('Hora'), th('Comida de ejemplo'), th('Indicaciones')]].concat(dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = str(eo && eo.title).trim();
+            return [{ text: pad(i + 1), color: '#666' }, { text: str(m.name) || `Comida ${i + 1}`, bold: true }, str(m.time) || '—',
+              et || ef.length ? { stack: [].concat(et ? [{ text: et, bold: true }] : [], ef.length ? [{ text: ef.map(([fn, c]) => (c ? `${fn} (${c})` : fn)).join(' · '), fontSize: 7.5, color: '#444', margin: [0, 1, 0, 0] }] : []) } : { text: '—', color: '#999' },
+              str(m.indic).trim() ? str(m.indic).trim() : { text: '—', color: '#999' }]; })) }, layout: Object.assign({}, lines, { paddingTop: () => 4, paddingBottom: () => 4 }), fontSize: 8.5 },
+          { text: [{ text: 'Día de ejemplo: ' }, { text: optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) }), bold: true }], fontSize: 8, color: '#444', margin: [0, 5, 0, 0] }]
         : [empty('Este tipo de día aún no tiene comidas.')]) });
     });
     const noteOf = (k) => str((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
@@ -3600,7 +3645,7 @@
         const a = A(); const n = $('#m-name').value.trim() || 'Nuevo día'; const from = a.dayTypes.find((d) => d.id === $('#m-copy').value);
         const dt = from ? Object.assign(clone(from), { id: uid(), name: n }) : newDayType(n, '', 0, trainMeals());
         dt.color = DAY_COLORS[a.dayTypes.length % DAY_COLORS.length];
-        if (from) dt.meals.forEach((m) => { m.id = uid(); m.options.forEach((o) => { o.id = uid(); }); });
+        if (from) dt.meals.forEach((m) => { const ei = m.options.findIndex((o) => o.id === m.ej); m.id = uid(); m.options.forEach((o) => { o.id = uid(); }); m.ej = ei >= 0 ? m.options[ei].id : null; });
         a.dayTypes.push(dt); a.activeDay = dt.id; closeModal(); commit();
       }, 'Crear');
     },
@@ -3614,7 +3659,7 @@
     dupDayType(el) {
       const a = A(); const src = a.dayTypes.find((d) => d.id === el.dataset.id); const c = clone(src);
       c.id = uid(); c.name = src.name + ' (copia)'; c.color = DAY_COLORS[a.dayTypes.length % DAY_COLORS.length];
-      c.meals.forEach((m) => { m.id = uid(); m.options.forEach((o) => { o.id = uid(); }); });
+      c.meals.forEach((m) => { const ei = m.options.findIndex((o) => o.id === m.ej); m.id = uid(); m.options.forEach((o) => { o.id = uid(); }); m.ej = ei >= 0 ? m.options[ei].id : null; });
       a.dayTypes.push(c); a.activeDay = c.id; commit();
     },
     delDayType(el) {
@@ -3637,8 +3682,13 @@
       m.name = t; commit(); toast(`Nombre traído del menú: «${t}».`);
     },
     // Desde la imagen de una comida en «Distribución»: abre esa comida en el Menú diario (ahí se agrega o cambia la imagen).
+    pickExample(el) { openModal(examplePicker(activeDay(A()), +el.dataset.i), null, true); },
+    setExample(el) {
+      const m = activeDay(A()).meals[+el.dataset.i], o = m && m.options[+el.dataset.k]; if (!o) return;
+      m.ej = o.id; closeModal(); commit();
+    },
     openMealInMenu(el) {
-      const id = el.dataset.id; collapsed.delete(id); saveCollapsed(); go('plan/menu');
+      const id = el.dataset.id; closeModal(); collapsed.delete(id); saveCollapsed(); go('plan/menu');
       setTimeout(() => document.getElementById('meal-' + id)?.scrollIntoView({ block: 'start' }), 60);
     },
     delMeal(el) {
