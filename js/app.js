@@ -901,6 +901,9 @@
       const off = daysBetween(c0, s.inicio);
       if (off > 0 && off % 7) { const k = Math.floor(off / 7), ow = stageOfWeek(a, k); out.push(`${name(s)} empieza un ${DOW_N[dow(s.inicio)].toLowerCase()}, a mitad de la ${weekLabel(k).toLowerCase()} del registro (que parte el ${fmtDate(weekStart(a, k))}): esa semana queda como «${esc(ow ? ow.tipo : '—')}».`); }
     });
+    const pm = planifMismatch(a), pf = planifOf(a);
+    if (pm) out.push(pm.kind !== 'dates' ? `Plan › Planificación indica la etapa «${esc(pf.objetivo)}», que no está en esta lista.`
+      : `Plan › Planificación indica «${esc(pf.objetivo)}» del ${rangeTxt(pf.inicio, pf.termino)}, pero aquí la etapa ${pm.i + 1} va del ${rangeTxt(pm.s.inicio, pm.s.fin)}.`);
     const mm = mismatchWeeks(a);
     if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de Configuración.`);
     return out;
@@ -1782,12 +1785,45 @@
     if (!Array.isArray(a.planif.objetivos)) a.planif.objetivos = ['', '', '', ''];
     return a.planif;
   };
-  // Duración entre inicio y término: «12 semanas», «5 semanas y 3 días» o «4 días». null si falta una fecha o están invertidas.
+  // Duración de inicio a término (ambos incluidos): «12 semanas», «5 semanas y 3 días» o «4 días». null si falta una fecha o están invertidas.
   function planifDuration(p) {
     if (!parseISO(p.inicio) || !parseISO(p.termino)) return null;
-    const d = daysBetween(p.inicio, p.termino); if (d < 0) return null;
+    const d0 = daysBetween(p.inicio, p.termino); if (d0 < 0) return null;
+    const d = d0 + 1; // se cuentan el primer y el último día, igual que en las etapas de Seguimiento › Configuración
     const w = Math.floor(d / 7), r = d % 7, pl = (n, s, pls) => `${n} ${n === 1 ? s : pls}`;
     return w && r ? `${pl(w, 'semana', 'semanas')} y ${pl(r, 'día', 'días')}` : w ? pl(w, 'semana', 'semanas') : pl(r, 'día', 'días');
+  }
+  // Etapa de Seguimiento › Configuración que corresponde a la de Planificación: mismo objetivo; si hay varias,
+  // la de fechas iguales, luego la que se cruza con estas fechas, luego la primera.
+  function planifStage(a) {
+    const p = planifOf(a); if (!p.objetivo) return null;
+    const c = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => x.s.tipo === p.objetivo);
+    const ok = parseISO(p.inicio) && parseISO(p.termino);
+    return c.find((x) => x.s.inicio === p.inicio && x.s.fin === p.termino)
+      || (ok && c.find((x) => stageDated(x.s) && p.inicio <= x.s.fin && p.termino >= x.s.inicio)) || c[0] || null;
+  }
+  // null si coincide (o si aún no se elige objetivo); si no, qué no coincide.
+  function planifMismatch(a) {
+    const p = planifOf(a); if (!p.objetivo) return null;
+    if (!ETAPAS.includes(p.objetivo)) return { kind: 'notlist' };
+    const m = planifStage(a);
+    if (!m) return { kind: 'nostage' };
+    if (m.s.inicio !== p.inicio || m.s.fin !== p.termino) return { kind: 'dates', ...m };
+    return null;
+  }
+  const rangeTxt = (i, f) => `${parseISO(i) ? fmtDate(i) : 'sin fecha'} – ${parseISO(f) ? fmtDate(f) : 'sin fecha'}`;
+  function planifAlert(a) {
+    const p = planifOf(a), mm = planifMismatch(a); if (!mm) return '';
+    const here = parseISO(p.inicio) || parseISO(p.termino) ? `aquí <b>${rangeTxt(p.inicio, p.termino)}</b>` : 'aquí aún no hay fechas';
+    const body = mm.kind === 'notlist'
+      ? `«${esc(p.objetivo)}» se escribió a mano y no es uno de los objetivos de la lista. Elige el que corresponda para que coincida con las etapas de Seguimiento › Configuración.`
+      : mm.kind === 'nostage'
+      ? `«${esc(p.objetivo)}» no está entre las etapas de Seguimiento › Configuración.`
+      : `Las fechas no coinciden con la etapa ${mm.i + 1} «${esc(mm.s.tipo)}» de Seguimiento › Configuración: ${here}; en Configuración <b>${rangeTxt(mm.s.inicio, mm.s.fin)}</b>.`;
+    const btns = mm.kind === 'notlist' ? '' : mm.kind === 'nostage'
+      ? `<button class="btn sm" data-action="planifAddStage">${ic('plus', 14)} Agregar la etapa «${esc(p.objetivo)}» con estas fechas</button>`
+      : `${stageDated(mm.s) ? `<button class="btn sm" data-action="planifUseStage">Usar las fechas de Configuración</button>` : ''}${parseISO(p.inicio) && parseISO(p.termino) ? `<button class="btn sm ghost" data-action="planifToStage">Llevar estas fechas a Configuración</button>` : ''}`;
+    return `<div class="callout alert-callout mt12" role="alert"><b>La etapa no coincide.</b> ${body}<div class="row mt8" style="gap:8px;flex-wrap:wrap">${btns}</div></div>`;
   }
   function viewPlanif() {
     const a = A(), p = planifOf(a), dur = planifDuration(p), n = p.objetivos.length;
@@ -1798,12 +1834,12 @@
       <div class="card-head"><span class="sec-num">01</span><h3>Etapa</h3><span class="sub">Qué se busca y en qué plazo</span></div>
       <div class="card-body">
         <div class="pf-grid">
-          <div class="field"><label for="pf-objetivo">Objetivo de la etapa</label>${I('planif.objetivo', { ph: 'Ej.: Pérdida de grasa', attrs: 'id="pf-objetivo" list="dl-etapas" autocomplete="off"' })}
-            <datalist id="dl-etapas">${ETAPAS.map((e) => `<option value="${esc(e)}"></option>`).join('')}</datalist></div>
+          <div class="field"><label for="pf-objetivo">Objetivo de la etapa</label>${SEL('planif.objetivo', [['', 'Selecciona un objetivo'], ...(p.objetivo && !ETAPAS.includes(p.objetivo) ? [p.objetivo] : []), ...ETAPAS], { attrs: 'id="pf-objetivo"' })}</div>
           ${date('inicio', 'Fecha de inicio')}
           ${date('termino', 'Fecha de término')}
         </div>
         ${inverted ? `<div class="hint mt12" style="color:var(--warn)" role="alert">La fecha de término es anterior a la de inicio.</div>` : dur ? `<div class="hint mt12">Duración de la etapa: <b>${dur}</b>.</div>` : ''}
+        ${planifAlert(a)}
       </div>
     </section>
     <section class="card mt16">
@@ -3655,6 +3691,10 @@
       }, 'Copiar');
     },
     // Objetivos de la etapa (pestaña Planificación)
+    // Planificación ↔ etapas de Configuración
+    planifUseStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; p.inicio = m.s.inicio; p.termino = m.s.fin; toast('Fechas tomadas de Seguimiento › Configuración.'); commit(); },
+    planifToStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; m.s.inicio = p.inicio; m.s.fin = p.termino; toast(`Etapa ${m.i + 1} de Configuración actualizada.`); commit(); },
+    planifAddStage() { const a = A(), p = planifOf(a); stagesOf(a).push(newStage(p.objetivo, { inicio: parseISO(p.inicio) ? p.inicio : '', fin: parseISO(p.termino) ? p.termino : '' })); toast(`Etapa «${p.objetivo}» agregada en Seguimiento › Configuración.`); commit(); },
     // Etapas del proceso (Seguimiento › Configuración)
     addStage(el) {
       const st = stagesOf(A()), ends = st.filter(stageDated).map((x) => x.fin).sort();
