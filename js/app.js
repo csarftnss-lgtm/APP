@@ -162,7 +162,7 @@
   // Etapa del proceso (Plan › Planificación › Configuración del proceso). diasEntreno y diasPeso: 0 = lunes … 6 = domingo.
   // objetivo: % semanal del peso (siempre positivo; el signo lo da el tipo de etapa).
   const newStage = (tipo = '', o = {}) => Object.assign({ id: uid(), tipo, inicio: '', fin: '', pesoInicial: null, grasaInicial: null,
-    diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], objetivos: [''], chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
+    diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], objetivos: [''], reqs: {}, chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
   const defaultStages = (inicio) => [
     newStage('Pérdida de grasa', { inicio, fin: addDays(inicio, 7 * 12 - 1), objetivo: 1, pasos: 10000, diasPeso: [0, 2, 4] }),
     newStage('Mini cut'), newStage('Mantenimiento'), newStage('Ganancia de masa muscular'),
@@ -181,7 +181,7 @@
       id: uid(), createdAt: todayISO(), q: newQ(nombre),
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
-      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
+      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
       ui: { trackTab: 'panel', panelWeek: null, chartMetric: 'abd' },
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
@@ -352,9 +352,9 @@
   // ---- Vinculación de clientes (lado del coach) ----
   const planOf = (snap) => { const s = Object.assign({}, snap); delete s.updatedAt; return stable(s); };
   function planSnapshot(a) {
-    const rc = reqCalc(a), used = new Map();
+    const used = new Map();
     const dayTypes = a.dayTypes.map((dt) => {
-      const t = dayTargets(a, dt, rc);
+      const t = dayTargets(a, dt); // requerimientos de la etapa vigente
       return {
         id: dt.id, name: dt.name, color: dt.color, notes: dt.notes || '',
         _t: t.ok ? { ok: true, kcal: t.kcal, p: t.p, c: t.c, g: t.g, peso: t.peso } : { ok: false, kcal: t.kcal ?? null },
@@ -639,12 +639,11 @@
     let get = tmb != null ? tmb * factor : null;
     if (get != null && r.sumarPasos && pasosKcal) get += pasosKcal;
     const kcalKg = num(r.kcalKg) ?? 7000;
-    // La etapa vigente de Plan › Planificación manda: fija el objetivo (déficit / mantenimiento / volumen) y, en déficit, el % semanal.
-    const se = stageEnergy(a), objetivo = se ? se.objetivo : r.objetivo;
+    const objetivo = ENERGY_L[r.objetivo] ? r.objetivo : 'deficit'; // la calculadora es libre: su resultado se trae a cada etapa desde Planificación
     const def = {}; const vol = {}; const mant = {};
     if (e.peso != null) {
       // Déficit: % de pérdida de peso semanal.
-      def.pct = (se && se.pct != null ? se.pct : num(r.pctDef)) ?? 0; def.kgSem = e.peso * def.pct / 100; def.gSem = def.kgSem * 1000; def.kgMes = def.kgSem * SEM_MES;
+      def.pct = num(r.pctDef) ?? 0; def.kgSem = e.peso * def.pct / 100; def.gSem = def.kgSem * 1000; def.kgMes = def.kgSem * SEM_MES;
       def.kcalSem = def.kgSem * kcalKg; def.kcalDia = def.kcalSem / 7;
       def.kcal = get != null ? get - def.kcalDia : null;
       // Volumen: % de aumento de peso semanal o mensual (según la unidad elegida).
@@ -660,7 +659,7 @@
       mant.kcal = get != null ? get + mant.kcalDia : null;
     }
     const obj = objetivo === 'deficit' ? def.kcal : objetivo === 'volumen' ? vol.kcal : (mant.kcal ?? get);
-    return { e, eq, tmb, factor, get, pasos, pasosKcal, def, vol, mant, obj, kcalKg, objetivo, se };
+    return { e, eq, tmb, factor, get, pasos, pasosKcal, def, vol, mant, obj, kcalKg, objetivo };
   }
   function objPanel(r, rc) {
     const L = (l, v) => `<div class="stat-line"><span>${l}</span><b>${v}</b></div>`;
@@ -689,9 +688,7 @@
     }
     const d = rc.def;
     return `<div class="label" style="margin-bottom:8px">Calculadora de déficit</div>
-      ${rc.se
-    ? F('% ↓ semanal del peso', suffix(I(`tracking.config.stages.${rc.se.i}.objetivo`, { num: true, live: true, ph: vstr(r.pctDef).replace('.', ',') }), '%'), `Es el objetivo de la etapa E${rc.se.i + 1}: si lo cambias aquí, cambia también en Planificación y en el seguimiento.`)
-    : F('% ↓ semanal del peso', suffix(I('req.pctDef', { num: true, live: true }), '%'), 'Referencia habitual: 0,5–1 % del peso corporal por semana.')}
+      ${F('% ↓ semanal del peso', suffix(I('req.pctDef', { num: true, live: true }), '%'), 'Referencia habitual: 0,5–1 % del peso corporal por semana.')}
       <div class="mt8">
         ${L('kg ↓ semanal', fmt(d.kgSem, 3))}${L('g ↓ semanal', fmt(d.gSem, 1))}
         ${L('kg ↓ mensual (aprox.)', fmt(d.kgMes, 3))}
@@ -701,8 +698,8 @@
   }
   function stepsFromQ(a) { const s = String(a.q.pasos || '').replace(/[.\s]/g, ''); const n = parseInt(s, 10); return isFinite(n) ? n : null; }
 
-  function dayTargets(a, dt, rc) {
-    if (dt._t) return dt._t; // plan publicado al cliente: metas ya calculadas por el coach
+  // Metas de un tipo de día según la CALCULADORA (Plan › Requerimientos). No se aplican solas: se traen a cada etapa.
+  function calcTargets(a, dt, rc) {
     rc = rc || reqCalc(a);
     const peso = rc.e.peso;
     const kcal = dt.kcalMode === 'manual' ? num(dt.kcal) : (rc.obj != null ? Math.round(rc.obj * (1 + (num(dt.ajuste) || 0) / 100)) : null);
@@ -712,11 +709,24 @@
     const c = (kcal - p * 4 - g * 9) / 4;
     return { kcal, p, c, g, ok: true, peso };
   }
-  // Macros por tipo de día tomados de Planificación (entrenamiento y descanso).
-  function planMacros(a, rc = reqCalc(a)) {
+  // Requerimientos que una ETAPA tiene anotados para un tipo de día: s.reqs = { idTipoDeDía: { kcal, p, c, g } } (macros en gramos).
+  function stageTargets(a, s, dt) {
+    const r = s && isPlain(s.reqs) && isPlain(s.reqs[dt.id]) ? s.reqs[dt.id] : {};
+    const kcal = num(r.kcal), p = num(r.p), c = num(r.c), g = num(r.g);
+    return { kcal, p, c, g, ok: kcal != null && p != null && c != null && g != null, peso: eff(a).peso };
+  }
+  const stageHasReqs = (a, s) => !!s && (a.dayTypes || []).some((dt) => stageTargets(a, s, dt).ok);
+  // Metas del plan para un tipo de día: las de la etapa indicada o, si no se indica, las de la etapa vigente.
+  function dayTargets(a, dt, s) {
+    if (dt._t) return dt._t; // plan publicado al cliente: metas ya resueltas por el coach
+    if (s === undefined) { const cs = currentStage(a); s = cs ? cs.s : null; }
+    return stageTargets(a, s, dt);
+  }
+  // Macros de entrenamiento y descanso según los requerimientos de una etapa (sin indicar: la vigente).
+  function planMacros(a, s) {
     const tr = a.dayTypes.find((d) => /entren/i.test(d.name)) || a.dayTypes[0];
     const rs = a.dayTypes.find((d) => /descans/i.test(d.name)) || a.dayTypes[1] || a.dayTypes[0];
-    return { E: tr ? macroStr(dayTargets(a, tr, rc)) : '', D: rs ? macroStr(dayTargets(a, rs, rc)) : '' };
+    return { E: tr ? macroStr(dayTargets(a, tr, s)) : '', D: rs ? macroStr(dayTargets(a, rs, s)) : '' };
   }
   const macroStr = (t) => (t && t.ok ? `Kcal: ${Math.round(t.kcal)} · P: ${Math.round(t.p)} g · CHO: ${Math.round(t.c)} g · G: ${Math.round(t.g)} g` : '');
 
@@ -837,18 +847,18 @@
   }
   // Estado de una etapa según la fecha de hoy: 'now' en curso, 'next' aún no empieza, 'done' terminada, 'none' sin fechas u objetivo.
   const stageState = (s) => { if (!stageDated(s)) return 'none'; const t = todayISO(); return t < s.inicio ? 'next' : t > s.fin ? 'done' : 'now'; };
-  // Etapa vigente: la que está en curso; si no hay, la próxima en empezar; si no, la última terminada. Manda en Requerimientos.
+  // Etapa vigente: la que está en curso; si no hay, la próxima en empezar; si no, la última terminada. Sus requerimientos son las metas del plan.
   function currentStage(a) {
     const st = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s));
     return st.find((x) => stageState(x.s) === 'now')
       || st.filter((x) => stageState(x.s) === 'next').sort((x, y) => (x.s.inicio < y.s.inicio ? -1 : 1))[0]
       || st.sort((x, y) => (x.s.fin > y.s.fin ? -1 : 1))[0] || null;
   }
-  // Objetivo energético (Requerimientos) que corresponde a cada objetivo de etapa. Los que no están aquí no lo fijan.
+  // Objetivo energético de la calculadora que corresponde a cada objetivo de etapa (solo para la migración).
   const STAGE_ENERGY = { 'Pérdida de grasa': 'deficit', 'Mini cut': 'deficit', Mantenimiento: 'mantenimiento', 'Ganancia de masa muscular': 'volumen', Volumen: 'volumen' };
   const pctTxt = (v) => String(+Math.abs(+v).toFixed(2)).replace('.', ','); // 1 → «1», 0.75 → «0,75»
   const ENERGY_L = { deficit: 'Déficit', mantenimiento: 'Mantenimiento', volumen: 'Volumen' };
-  // Lo que la etapa vigente fija en Requerimientos: { s, i, objetivo, pct } (pct = % semanal de pérdida, solo en déficit). null si no fija nada.
+  // Lo que la etapa vigente fijaba en la calculadora cuando la bloqueaba (versión anterior): { s, i, objetivo, pct }. Hoy solo lo usa la migración.
   function stageEnergy(a) {
     if (!a || !a.tracking || !isPlain(a.tracking.config)) return null;
     const x = currentStage(a); if (!x) return null;
@@ -933,6 +943,19 @@
     pf.movedToStages = true;
   }
 
+  const roundReq = (t) => ({ kcal: Math.round(t.kcal), p: Math.round(t.p), c: Math.round(t.c), g: Math.round(t.g) });
+  // Una sola vez, para atletas anteriores a «requerimientos por etapa»: la etapa vigente recibe lo que daba la calculadora,
+  // para que el menú, el documento y el seguimiento no queden sin metas. Las demás etapas parten vacías.
+  function seedStageReqs(a) {
+    const c = a.tracking.config;
+    c.stages.forEach((x) => { if (!isPlain(x.reqs)) x.reqs = {}; });
+    // Si la etapa vigente fijaba la calculadora y eso ya se había aceptado, la calculadora (ahora libre) conserva esos valores.
+    const se = stageEnergy(a);
+    if (se && a.req.stageLinked) { a.req.objetivo = se.objetivo; if (se.pct != null) a.req.pctDef = se.pct; }
+    const cs = currentStage(a);
+    if (cs) { const rc = reqCalc(a); (a.dayTypes || []).forEach((dt) => { const t = calcTargets(a, dt, rc); if (t.ok && !isPlain(cs.s.reqs[dt.id])) cs.s.reqs[dt.id] = roundReq(t); }); }
+    c.reqsSeeded = true;
+  }
   // Alertas de fechas: etapas invertidas, superpuestas, con días sin etapa, que empiezan a mitad de semana
   // y semanas marcadas con otra etapa en el registro.
   function stageAlerts(a) {
@@ -950,6 +973,9 @@
       const off = daysBetween(c0, s.inicio);
       if (off > 0 && off % 7) { const k = Math.floor(off / 7), ow = stageOfWeek(a, k); out.push(`${name(s)} empieza un ${DOW_N[dow(s.inicio)].toLowerCase()}, a mitad de la ${weekLabel(k).toLowerCase()} del registro (que parte el ${fmtDate(weekStart(a, k))}): esa semana queda como «${esc(ow ? ow.tipo : '—')}».`); }
     });
+    const cs = currentStage(a);
+    if (cs) { const falt = (a.dayTypes || []).filter((dt) => !stageTargets(a, cs.s, dt).ok).map((dt) => `«${esc(dt.name)}»`);
+      if (falt.length) out.push(`A la etapa vigente, ${name(cs.s)}, le faltan los requerimientos de ${falt.join(' y ')}: el menú diario, el documento y el seguimiento no tendrán esas metas.`); }
     const mb = manualBuscadoWeeks(a);
     if (mb.length) out.push(`${mb.length === 1 ? 'Una semana tiene' : `${mb.length} semanas tienen`} un % buscado puesto a mano, distinto al objetivo de su etapa: ${mb.slice(0, 6).map((x) => `${weekLabel(x.k)} (${fmtS(x.own)} %; etapa ${fmtS(x.tg)} %)`).join(', ')}${mb.length > 6 ? '…' : ''}. En esas semanas manda el valor manual.`);
     const mm = mismatchWeeks(a);
@@ -1377,8 +1403,7 @@
       const q = a.q, done = Q_SECTIONS.filter((s) => s[2](q)).length, next = Q_SECTIONS.find((s) => !s[2](q));
       qStatus = `<div class="q-progress"><div class="progress"><span style="width:${(done / Q_SECTIONS.length) * 100}%"></span></div><span class="small muted nowrap">${done} de ${Q_SECTIONS.length} secciones</span></div>`;
       qChips = next ? `<a class="lc-chip" href="#/cuestionario" data-action="goQ" data-id="${next[0]}">Continuar en: ${next[1]}</a>` : '<span class="pill ok">Cuestionario completo</span>';
-      const rc = reqCalc(a);
-      pStatus = `<div class="lc-rows">${a.dayTypes.map((dt) => { const t = dayTargets(a, dt, rc), tot = dayTotals(dt), p = adq(tot.kcal, t.kcal); return `<div class="lc-row"><span><span class="color-dot" style="background:${dt.color}"></span> ${esc(dt.name)}</span><span><b class="kc">${t.kcal != null ? fmt(t.kcal) + ' kcal' : '—'}</b>${p != null ? ` <span class="small ${adqCls(p)}">menú ${fmt(p)}%</span>` : ''}</span></div>`; }).join('')}</div>`;
+      pStatus = `<div class="lc-rows">${a.dayTypes.map((dt) => { const t = dayTargets(a, dt), tot = dayTotals(dt), p = adq(tot.kcal, t.kcal); return `<div class="lc-row"><span><span class="color-dot" style="background:${dt.color}"></span> ${esc(dt.name)}</span><span><b class="kc">${t.kcal != null ? fmt(t.kcal) + ' kcal' : '—'}</b>${p != null ? ` <span class="small ${adqCls(p)}">menú ${fmt(p)}%</span>` : ''}</span></div>`; }).join('')}</div>`;
       pChips = [['req', 'Requerimientos'], ['planif', 'Planificación'], ['menu', 'Menú diario'], ['dist', 'Distribución'], ['alimentos', 'Base de alimentos']].map(([k, l]) => `<a class="lc-chip" href="#/plan/${k}">${l}</a>`).join('');
       const cw = currentWeek(a), lw = lastWeight(a);
       let st = null; for (let k = Math.min(cw, weekCount(a)); k >= 1; k--) { const s = status(a, k); if (s.key !== 'none') { st = s; break; } }
@@ -1557,8 +1582,8 @@
 
   // Orden de los apartados de Plan: al final de cada uno, una tarjeta lleva al siguiente (y la última, a Seguimiento).
   const PLAN_FLOW = [
-    ['req', 'Requerimientos', 'calc', 'Gasto energético, objetivo y macros de cada tipo de día.'],
-    ['planif', 'Planificación', 'target', 'Configuración del proceso: etapas con fechas, metas, objetivos y gráficos.'],
+    ['req', 'Requerimientos', 'calc', 'Calculadora: gasto energético, objetivo y macros de cada tipo de día.'],
+    ['planif', 'Planificación', 'target', 'Configuración del proceso: etapas con fechas, requerimientos, metas, objetivos y gráficos.'],
     ['menu', 'Menú diario', 'menu', 'Calendario de alimentación y comidas de cada tipo de día.'],
     ['dist', 'Distribución de comidas', 'clock', 'Horarios e indicaciones de cada comida.'],
     ['minuta', 'Descargar planificación', 'down', 'Vista previa y descarga del documento en PDF.'],
@@ -1573,6 +1598,16 @@
         <span class="ns-go">${ic('arrowR', 20)}</span>
       </a>`;
   }
+  // Aviso en Menú diario y Distribución cuando la etapa vigente no tiene los requerimientos de ese tipo de día.
+  function reqMissing(a, dt) {
+    if (CLIENT || dt._t) return '';
+    const cs = currentStage(a), link = '<a href="#/plan/planif">Plan › Planificación</a>';
+    if (!cs) return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>No hay una etapa vigente.</b> Define el objetivo y las fechas de una etapa en ${link} para tener metas de calorías y macros.</div>`;
+    if (stageTargets(a, cs.s, dt).ok) return '';
+    return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Faltan los requerimientos de la etapa.</b> La etapa vigente, E${cs.i + 1} «${esc(cs.s.tipo)}», no tiene anotados los de «${esc(dt.name)}». Anótalos o tráelos de la calculadora en ${link}.</div>`;
+  }
+  // Metas del día en el documento.
+  const tgtTxt = (t, html) => (t.ok ? `Objetivo: ${html ? '<b>' : ''}${fmt(t.kcal)} kcal${html ? '</b>' : ''} · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g` : 'Objetivo: faltan los requerimientos de la etapa');
   function viewPlan(tab) {
     const views = { req: viewReq, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
     if (tab === 'minicut') tab = 'planif'; // el Mini cut ahora vive dentro de «Planificación»
@@ -1713,7 +1748,10 @@
       <td style="width:30px"><span class="eq-radio"></span></td><td><b>${eq.name}</b><div class="small muted">${eq.ref}</div></td>
       <td class="num"><b>${v != null ? fmt(v) : '—'}</b></td><td class="num muted">${v != null ? fmt(v * rc.factor) : '—'}</td></tr>`; }).join('');
     const fac = num(r.factor);
+    const cs = currentStage(a), csLine = cs ? a.dayTypes.map((dt) => { const t = stageTargets(a, cs.s, dt); return `<b>${esc(dt.name)}</b> ${t.ok ? calcLine(t) : 'sin anotar'}`; }).join(' · ') : '';
     return `
+    <div class="callout info" style="margin-bottom:16px"><b>Esta página es una calculadora.</b> Lo que calcules aquí no se aplica solo al plan: en <a href="#/plan/planif">Plan › Planificación</a>, cada etapa tiene el botón «Traer los requerimientos de la calculadora», y esos son los que usan el menú diario, el documento y el seguimiento.
+      ${cs ? `<div class="mt8 small">Etapa vigente, E${cs.i + 1} «${esc(cs.s.tipo)}»: ${csLine}.</div>` : ''}</div>
     <div class="grid" style="grid-template-columns: 1.15fr 1fr 0.9fr; align-items:start">
       <section class="card">
         <div class="card-head"><h3>Datos del atleta</h3><span class="spacer"></span><button class="btn xs" data-action="useQ">Usar datos del cuestionario</button></div>
@@ -1775,10 +1813,9 @@
     </section>
 
     <section class="card mt16">
-      <div class="card-head"><h3>Objetivo energético</h3><span class="sub">${rc.se ? `Lo define la etapa E${rc.se.i + 1} «${esc(rc.se.s.tipo)}»` : 'Elige el objetivo para ver su calculadora'}</span><span class="spacer"></span>
-        <div class="seg${rc.se ? ' locked' : ''}"${rc.se ? ' title="Lo define la etapa vigente en Plan › Planificación"' : ''}>${[['deficit', 'Déficit'], ['mantenimiento', 'Mantenimiento'], ['volumen', 'Volumen']].map(([k, l]) => `<button class="${rc.objetivo === k ? 'active' : ''}" data-action="setObj" data-v="${k}" ${rc.se ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+      <div class="card-head"><h3>Objetivo energético</h3><span class="sub">Elige el objetivo para ver su calculadora</span><span class="spacer"></span>
+        <div class="seg">${[['deficit', 'Déficit'], ['mantenimiento', 'Mantenimiento'], ['volumen', 'Volumen']].map(([k, l]) => `<button class="${rc.objetivo === k ? 'active' : ''}" data-action="setObj" data-v="${k}">${l}</button>`).join('')}</div>
       </div>
-      ${reqStageNote(a, rc)}
       <div class="card-body obj-grid">
         <div class="obj-panel">${objPanel(r, rc)}</div>
         <div class="obj-summary">
@@ -1793,32 +1830,14 @@
     </section>
 
     <div class="row mt24" style="justify-content:space-between">
-      <div><h3 style="font-size:17px">Objetivos por tipo de día</h3><div class="muted small">Calorías y macronutrientes de cada día (entrenamiento, descanso u otro que definas).</div></div>
+      <div><h3 style="font-size:17px">Objetivos por tipo de día</h3><div class="muted small">Resultado de la calculadora para cada día (entrenamiento, descanso u otro que definas). Se trae a cada etapa desde Planificación.</div></div>
       <button class="btn sm" data-action="addDayType">${ic('plus', 14)} Tipo de día</button>
     </div>
     <div class="grid g2 mt12">${a.dayTypes.map((dt, i) => dayTypeCard(a, dt, i, rc)).join('')}</div>`;
   }
 
-  // Aviso en «Objetivo energético»: qué etapa lo define y, la primera vez, qué cambió respecto de lo que había.
-  function reqStageNote(a, rc) {
-    const r = a.req, se = rc.se, cs = currentStage(a);
-    const link = '<a href="#/plan/planif">Plan › Planificación</a>';
-    if (!se) {
-      return cs ? `<div class="req-stage-note">La etapa vigente, E${cs.i + 1} «${esc(cs.s.tipo)}», no fija un objetivo energético: se usa el que elijas aquí. Etapas en ${link}.</div>`
-        : `<div class="req-stage-note">Ninguna etapa tiene objetivo y fechas en ${link}: se usa el objetivo que elijas aquí.</div>`;
-    }
-    const st = stageState(se.s), when = st === 'now' ? 'en curso' : st === 'next' ? `empieza el ${fmtDate(se.s.inicio)}` : `terminó el ${fmtDate(se.s.fin)}`;
-    let out = `<div class="req-stage-note">Manda la etapa vigente de ${link}: <b>E${se.i + 1} «${esc(se.s.tipo)}»</b> (${fmtDate(se.s.inicio)} – ${fmtDate(se.s.fin)}, ${when}) → <b>${ENERGY_L[se.objetivo]}</b>${se.pct != null ? ` de <b>${pctTxt(se.pct)} % semanal</b>` : ''}.</div>`;
-    // Primera vez con datos anteriores distintos: se muestra qué había y se deja elegir.
-    const old = num(r.pctDef), sameType = r.objetivo === se.objetivo, pctDiff = se.objetivo === 'deficit' && se.pct != null && old != null && old !== se.pct;
-    if (!r.stageLinked && (!sameType || pctDiff)) {
-      out += `<div class="callout alert-callout req-stage-alert" role="alert"><b>Este cálculo cambió.</b> Antes estaba en ${ENERGY_L[r.objetivo] || '—'}${r.objetivo === 'deficit' && old != null ? ` de ${pctTxt(old)} % semanal` : ''}; ahora lo define la etapa.
-        <div class="row mt8" style="gap:8px;flex-wrap:wrap">${sameType && pctDiff ? `<button class="btn sm" data-action="reqKeepOld">Usar ${pctTxt(old)} % en la etapa</button><button class="btn sm ghost" data-action="reqAck">Mantener ${pctTxt(se.pct)} %</button>` : '<button class="btn sm" data-action="reqAck">Entendido</button>'}</div></div>`;
-    }
-    return out;
-  }
   function dayTypeCard(a, dt, i, rc) {
-    const t = dayTargets(a, dt, rc), base = `dayTypes.${i}`;
+    const t = calcTargets(a, dt, rc), base = `dayTypes.${i}`;
     return `<section class="card">
       <div class="card-head"><span class="color-dot" style="background:${dt.color}"></span><h3>${esc(dt.name)}</h3><span class="spacer"></span>
         <button class="btn xs ghost" data-action="editDayType" data-id="${dt.id}">${ic('edit', 13)}</button>
@@ -1900,7 +1919,7 @@
       </div>`;
     return `
     ${daySeg(a)}
-    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso)}</div>` : '<div class="callout">Completa los requerimientos para ver las calorías y los macros del día.</div>'}
+    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso)}</div>` : (reqMissing(a, dt) || '<div class="callout">Faltan los requerimientos de la etapa para ver las calorías y los macros del día.</div>')}
     <div class="dm-head">
       <div><h3>Distribución de comidas diarias · ${esc(dt.name)}</h3><div class="sub">${n} ${n === 1 ? 'comida' : 'comidas'} · la imagen es la de la opción principal (★) del Menú diario</div></div>
       <span class="spacer"></span>
@@ -1990,9 +2009,10 @@
     ${daySeg(a, `${dt.meals.length && dt.meals.every((m) => collapsed.has(m.id))
       ? `<button class="btn sm ghost" data-action="expandAll">${ic('arrowDown', 14)} Expandir todas</button>`
       : `<button class="btn sm ghost" data-action="collapseAll">${ic('arrowUp', 14)} Contraer todas</button>`}`)}
+    ${reqMissing(a, dt)}
     <div class="menu-sticky">
     <section class="card day-summary" aria-label="Total diario">
-      <div class="row ds-head"><b>${esc(dt.name)} · total del día</b><span class="muted small ds-sub">Suma de las opciones principales (★) vs. macros calculados · adecuación</span></div>
+      <div class="row ds-head"><b>${esc(dt.name)} · total del día</b><span class="muted small ds-sub">Suma de las opciones principales (★) vs. requerimientos de la etapa vigente · adecuación</span></div>
       <div class="sum-grid">
         ${sumItem('Kcal', tot.kcal, t.kcal, 'kcal', 'kc')}${sumItem('Proteínas', tot.p, t.p, 'g', 'kp')}${sumItem('Carbohidratos', tot.c, t.c, 'g', 'kcarb')}${sumItem('Grasas', tot.g, t.g, 'g', 'kg')}
       </div>
@@ -2321,16 +2341,16 @@
       return `<td class="num computed avg-td${first ? ' g-start' : ''}">${r.avg != null ? `<b${c ? ` class="sc-val" style="--sc:${c}"` : ''}>${fmt(r.avg, 1)}</b>${incMini(r.n)}` : '<span class="muted">—</span>'}</td>`;
     };
     const ro = isClientView(); // el cliente no cambia etapa, % buscado ni macros: los define el coach
-    // Macros sincronizados con Planificación: la semana actual y las futuras siempre muestran el plan vigente
-    // (y la actual guarda una copia, para que quede registrada al terminar la semana); las pasadas muestran lo registrado.
-    const pm = planMacros(a);
+    // Macros = requerimientos de la etapa de cada semana (Plan › Planificación): la semana actual y las futuras muestran
+    // los de su etapa (y la actual guarda una copia, para que quede registrada al terminar); las pasadas muestran lo registrado.
+    const pmCache = new Map(), pmOf = (k) => { const st = stageOfWeek(a, k); if (!pmCache.has(st)) pmCache.set(st, planMacros(a, ro ? undefined : st)); return pmCache.get(st); };
     let snap = false;
     const macCell = (k, f, live) => {
       const stored = wk(a, k)[f] || '', usePlan = k >= cw || !stored, v = usePlan ? live : stored;
       if (k === cw && !ro && live && stored !== live) { setP(`tracking.weeks.${k}.${f}`, live); snap = true; }
       const parts = String(v || '').match(/Kcal:\s*([\d.]+).*?P:\s*([\d.]+).*?CHO:\s*([\d.]+).*?G:\s*([\d.]+)/);
-      const body = parts ? `<span class="kc"><b>${fmt(+parts[1])}</b> kcal</span><span><span class="kp">P ${fmt(+parts[2])}</span> · <span class="kcarb">C ${fmt(+parts[3])}</span> · <span class="kg">G ${fmt(+parts[4])}</span></span>` : (v ? esc(v) : '<span class="muted">Completa Planificación</span>');
-      const tag = usePlan ? `<span class="mac-tag" title="Se toma y actualiza automáticamente desde Plan">${ic('target', 11)} Plan${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
+      const body = parts ? `<span class="kc"><b>${fmt(+parts[1])}</b> kcal</span><span><span class="kp">P ${fmt(+parts[2])}</span> · <span class="kcarb">C ${fmt(+parts[3])}</span> · <span class="kg">G ${fmt(+parts[4])}</span></span>` : (v ? esc(v) : '<span class="muted">Faltan los requerimientos de la etapa</span>');
+      const tag = usePlan ? `<span class="mac-tag" title="Requerimientos de la etapa de esta semana (Plan › Planificación)">${ic('target', 11)} Etapa${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
       return `<td class="computed mac mac-sync">${body}${tag}</td>`;
     };
     // % buscado: muestra el valor de la etapa de esa semana (Plan › Planificación);
@@ -2353,8 +2373,8 @@
         <td class="num computed"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td>
         ${k === 0 ? '<td class="computed"></td>' : ro ? `<td class="num computed">${buscado(a, k) != null ? fmtS(buscado(a, k)) + '%' : '—'}</td>` : buscadoCell(k)}
         <td class="num computed nowrap">${l != null ? `<span class="pill ${pillCls[st.key]}" title="${esc(st.label)}">${fmtS(l)}%</span>` : '—'}</td>
-        ${macCell(k, 'macrosE', pm.E)}${macCell(k, 'macrosD', pm.D)}
-        <td class="center">${!ro && k < cw && (w.macrosE || w.macrosD) && (w.macrosE !== pm.E || w.macrosD !== pm.D) ? `<button class="btn xs ghost" data-action="fillMacros" data-k="${k}" title="Reemplazar lo registrado por los macros actuales de Planificación">${ic('copy', 13)}</button>` : ''}</td>
+        ${macCell(k, 'macrosE', pmOf(k).E)}${macCell(k, 'macrosD', pmOf(k).D)}
+        <td class="center">${!ro && k < cw && (w.macrosE || w.macrosD) && (w.macrosE !== pmOf(k).E || w.macrosD !== pmOf(k).D) && (pmOf(k).E || pmOf(k).D) ? `<button class="btn xs ghost" data-action="fillMacros" data-k="${k}" title="Reemplazar lo registrado por los requerimientos de la etapa de esa semana">${ic('copy', 13)}</button>` : ''}</td>
         ${hasDailySteps ? `<td class="num computed nowrap">${fmt(steps)}${stepsIncomplete(a, k) ? `<div class="inc-pill" title="Promedio parcial: faltan ${stepsIncomplete(a, k)} días por ingresar">Incompleto · ${weekStepsDays(a, k)}/7</div>` : ''}</td>` : c(k, 'pasos')}
         ${SCALES.map(([f], i) => avgCell(k, f, i === 0)).join('')}
         ${meals.idx.map((h, i) => avgCell(k, 'h' + h, i === 0)).join('')}
@@ -2530,6 +2550,29 @@
   }
   const dayPicker = (i, f, s) => `<div class="dow-pick" role="group">${DOW_L.map((l, d) => { const on = (s[f] || []).includes(d);
     return `<button type="button" class="dow${on ? ' on' : ''}" data-action="toggleStageDay" data-i="${i}" data-f="${f}" data-d="${d}" aria-pressed="${on}" title="${DOW_N[d]}" aria-label="${DOW_N[d]}">${l}</button>`; }).join('')}</div>`;
+  const calcLine = (t) => `${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g`;
+  // Requerimientos de la etapa: kcal y macros de cada tipo de día, anotados a mano o traídos de la calculadora.
+  function stageReqs(a, s, i) {
+    const base = `tracking.config.stages.${i}.reqs`, rc = reqCalc(a);
+    const cell = (dt, f, lab) => `<td class="pad0">${I(`${base}.${dt.id}.${f}`, { cls: 'cell', num: true, live: true, ph: '—', attrs: `aria-label="${esc(lab)} · ${esc(dt.name)}"` })}</td>`;
+    const rows = a.dayTypes.map((dt) => {
+      const t = stageTargets(a, s, dt), has = t.p != null && t.c != null && t.g != null, sum = has ? t.p * 4 + t.c * 4 + t.g * 9 : null;
+      const off = sum != null && t.kcal ? Math.abs(sum - t.kcal) / t.kcal > 0.03 : false;
+      return `<tr><td class="lbl"><span class="color-dot" style="background:${esc(dt.color || 'var(--muted)')}"></span> ${esc(dt.name)}</td>
+        ${cell(dt, 'kcal', 'Kcal')}${cell(dt, 'p', 'Proteínas (g)')}${cell(dt, 'c', 'Carbohidratos (g)')}${cell(dt, 'g', 'Grasas (g)')}
+        <td class="num computed nowrap">${sum != null ? `<span${off ? ' style="color:var(--warn)"' : ''} title="Proteínas × 4 + carbohidratos × 4 + grasas × 9${off ? ': no coincide con las kcal anotadas' : ''}">${fmt(sum)} kcal</span>` : '<span class="muted">—</span>'}</td>
+        <td class="center">${t.ok ? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta</span>'}</td></tr>`;
+    }).join('');
+    const calc = a.dayTypes.map((dt) => [dt, calcTargets(a, dt, rc)]).filter(([, t]) => t.ok);
+    return `<div class="stage-objs stage-reqs mt16">
+      <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Requerimientos de la etapa <span class="muted">· por tipo de día</span></div>
+        <button class="btn sm" data-action="pullReqs" data-i="${i}" ${calc.length ? '' : 'disabled'}>${ic('calc', 14)} Traer los requerimientos de la calculadora</button></div>
+      <div class="table-wrap mt8"><table class="t req-table"><thead><tr><th>Tipo de día</th><th class="num">Kcal</th><th class="num">Proteínas (g)</th><th class="num">Carbohidratos (g)</th><th class="num">Grasas (g)</th><th class="num">Suma de macros</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="hint mt8">${calc.length
+        ? `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) da ahora, en ${ENERGY_L[rc.objetivo].toLowerCase()}: ${calc.map(([dt, t]) => `<b>${esc(dt.name)}</b> ${calcLine(t)}`).join(' · ')}. Al traerlos quedan copiados aquí: si después cambias la calculadora, esta etapa no cambia hasta que los traigas de nuevo.`
+        : `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) aún no tiene resultados: complétala para poder traerlos, o anota los requerimientos a mano.`}</div>
+    </div>`;
+  }
   // Lista de objetivos de una etapa (se pueden agregar y quitar). Salen en el documento que se descarga.
   function stageObjetivos(s, i) {
     if (!Array.isArray(s.objetivos)) s.objetivos = [''];
@@ -2550,7 +2593,7 @@
     const pill = !s.tipo ? '<span class="pill">No se usa</span>'
       : stt === 'now' ? '<span class="pill ok">En curso</span>' : stt === 'next' ? `<span class="pill${isCur ? ' gold' : ''}">Próxima</span>` : stt === 'done' ? '<span class="pill">Terminada</span>' : '<span class="pill warn">Sin fechas</span>';
     const nObj = (s.objetivos || []).filter((x) => String(x || '').trim()).length;
-    const brief = !s.tipo ? '' : [stageFull(s) && num(s.objetivo) != null ? `${pctTxt(num(s.objetivo))} % / sem` : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`].filter(Boolean).join(' · ');
+    const brief = !s.tipo ? '' : [stageFull(s) && num(s.objetivo) != null ? `${pctTxt(num(s.objetivo))} % / sem` : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`, stageHasReqs(a, s) ? 'con requerimientos' : 'sin requerimientos'].filter(Boolean).join(' · ');
     const date = (k, label) => `<div class="field"><label for="st-${s.id}-${k}">${label}</label>${D(`${p}.${k}`, `st-${s.id}-${k}`)}</div>`;
     const sub = !s.tipo ? 'Elige un objetivo para usar esta etapa' : stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas: aún no se refleja en el registro';
     let fields = '';
@@ -2581,6 +2624,7 @@
       ${col ? '' : `<div class="card-body" id="stage-body-${s.id}">
         <div class="grid g3">${F('Objetivo', SEL(`${p}.tipo`, opts))}${date('inicio', 'Fecha inicial')}${date('fin', 'Fecha final')}</div>
         ${s.tipo ? stageObjetivos(s, i) : ''}
+        ${s.tipo ? stageReqs(a, s, i) : ''}
         ${fields}
       </div>`}</section>`;
   }
@@ -2605,8 +2649,8 @@
     <div class="callout mt16 small"><b>Qué manda cada dato de la etapa.</b>
       <ul class="alert-list">
         <li><b>Fechas:</b> arman el calendario del registro diario y del seguimiento semanal, y dicen a qué etapa pertenece cada semana.</li>
-        <li><b>Objetivo de pérdida (% semanal):</b> es el % buscado de cada semana de la etapa y, en la etapa vigente, el déficit de Requerimientos (y con él las kcal y los macros de cada tipo de día).</li>
-        <li><b>Objetivo de la etapa vigente:</b> fija el objetivo energético de Requerimientos (pérdida de grasa y mini cut → déficit; mantenimiento → mantenimiento; ganancia de masa muscular → volumen).</li>
+        <li><b>Requerimientos de la etapa:</b> los de la etapa vigente son las metas de calorías y macros del menú diario, la distribución, el documento y el plan del cliente; los de cada etapa, los macros de sus semanas en el seguimiento semanal. Se anotan a mano o se traen de la calculadora (Plan › Requerimientos), que no se aplica sola.</li>
+        <li><b>Objetivo de pérdida (% semanal):</b> es el % buscado de cada semana de la etapa.</li>
         <li><b>Días de entrenamiento:</b> definen el tipo de día (entrenamiento o descanso) del calendario de alimentación y las comidas de «Hambre» del registro diario.</li>
         <li><b>Días de reporte de peso y meta de pasos:</b> son las metas que muestran el panel y el registro diario.</li>
         <li><b>Peso inicial:</b> punto de partida de la trayectoria objetivo y del seguimiento.</li>
@@ -2920,7 +2964,7 @@
         <div class="pm-total"><span class="pm-tl">Aporte total</span><b>${fmt(ot.kcal)} kcal</b><span>Proteína ${fmt(ot.p, 1)} g</span><span>Carbohidratos ${fmt(ot.c, 1)} g</span><span>Grasa ${fmt(ot.g, 1)} g</span></div>
         ${o.notes ? `<div class="pm-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`; }).join('')}</div>`).join('');
     return `<div class="pm-scheme" style="${schemeStyle(dayScheme(dt))}"><div class="pm-head"><div>${head ? `<div class="pm-eyebrow">${esc(head.eyebrow)}</div><h2 class="pd-h">${esc(head.title)}</h2>` : `<div class="pm-eyebrow">Minuta · ${esc(dt.name)}</div><h1>${esc(a.q.nombre || '')}</h1>`}</div>
-      <div class="pm-targets">Objetivo: <b>${fmt(t.kcal)} kcal</b> · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div></div>
+      <div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div></div>
       ${meals}${dt.notes ? `<div class="pm-notes pm-day"><b>Notas generales:</b><br>${esc(dt.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
   }
   // Minuta del tipo de día activo (botón del portal del cliente): también se descarga en PDF.
@@ -2968,6 +3012,7 @@
     return stagesOf(a).map((s, i) => ({ s, n: i + 1, objs: (s.objetivos || []).map((x) => String(x || '').trim()).filter(Boolean) }))
       .filter((x) => x.s.tipo && (stageDated(x.s) || x.objs.length)).map((x) => {
         const s = x.s, meta = [];
+        (a.dayTypes || []).forEach((dt) => { const t = stageTargets(a, s, dt); if (t.ok) meta.push([`Requerimientos · ${dt.name}`, calcLine(t)]); });
         if (stageFull(s)) {
           if (num(s.objetivo) != null) meta.push(['Objetivo', `${pctTxt(num(s.objetivo))} % semanal de ${GAIN_TYPES.includes(s.tipo) ? 'aumento' : 'pérdida'}`]);
           if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
@@ -3036,7 +3081,7 @@
       const land = a.dayTypes.map((dt, i) => {
         const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
         const head = `${i ? '' : '<div class="pd-sec-title"><span>3</span>Minuta ejemplo</div>'}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
-          ${pm.length ? `<div class="pm-targets">Objetivo: <b>${fmt(t.kcal)} kcal</b> · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
+          ${pm.length ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
         const body = pm.length ? minutaGridHTML(dt, pm, imgOf) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
         return `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`;
       }).join('');
@@ -3225,7 +3270,7 @@
     const kit = pdfKit(), name = a.q.nombre || 'Atleta', t = dayTargets(a, dt), tot = dayTotals(dt), data = minutaGridData(kit, pm, imgOf);
     const head = () => [
       { columns: [{ width: '*', stack: [{ text: `MINUTA · ${kit.str(dt.name)}`.toUpperCase(), style: 'eyebrow', color: dayScheme(dt).ink }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] },
-        { width: 'auto', text: `Objetivo: ${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 },
+        { width: 'auto', text: `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 },
       landRule(2.5, dayScheme(dt).c, 5, 8)];
     const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => head().concat(pdfMinutaGrid(kit, dt, data, f, h)));
     return Object.assign(pdfDoc(kit, `Minuta ${dt.name} · ${name}`, `Minuta ${dt.name} · ${name}`, head().concat(pdfMinutaGrid(kit, dt, data, fs, ih))), { pageOrientation: 'landscape' });
@@ -3267,7 +3312,7 @@
     for (let di = 0; di < a.dayTypes.length; di++) {
       const dt = a.dayTypes[di];
       const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
-      const hd = dayHead('Minuta ejemplo', dt.name, pm.length ? `Objetivo: ${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
+      const hd = dayHead('Minuta ejemplo', dt.name, pm.length ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
       // Cada minuta ocupa su propia hoja horizontal (la primera comparte hoja con el título de la sección).
       if (di) { hd[0].pageBreak = 'before'; hd[0].pageOrientation = 'landscape'; }
       const dsc = dayScheme(dt); hd[0].columns[0].stack[0].color = dsc.ink; hd[1] = landRule(2.5, dsc.c, 5, 8);
@@ -3485,7 +3530,7 @@
     newAthlete() {
       promptModal('Nuevo atleta', F('Nombre y apellido', '<input class="input" id="m-name" placeholder="Ej.: Sebastián Muñoz">'), () => {
         const n = $('#m-name').value.trim() || 'Nuevo atleta';
-        const at = newAthlete(n); at.req.stageLinked = true; S.athletes.push(at); S.activeId = at.id; closeModal(); save(); go('cuestionario');
+        const at = newAthlete(n); S.athletes.push(at); S.activeId = at.id; closeModal(); save(); go('cuestionario');
       }, 'Crear');
     },
     switchAthlete(el) { S.activeId = el.dataset.id; closeModal(); commit(); },
@@ -3531,9 +3576,7 @@
 
     setEq(el, ev) { if (ev.target.closest('input')) return; A().req.ecuacion = el.dataset.id; commit(); },
     setFactor(el) { A().req.factor = parseFloat(el.dataset.v); commit(); },
-    setObj(el) { const a = A(); if (stageEnergy(a)) return; a.req.objetivo = el.dataset.v; commit(); },
-    reqAck() { A().req.stageLinked = true; commit(); },
-    reqKeepOld() { const a = A(), se = stageEnergy(a), old = num(a.req.pctDef); if (se && old != null) se.s.objetivo = old; a.req.stageLinked = true; toast('Objetivo de la etapa actualizado.'); commit(); },
+    setObj(el) { A().req.objetivo = el.dataset.v; commit(); },
     setVolUnit(el) { const r = A().req; if (r.volUnit === el.dataset.v) return; const p = num(r.pctVol); const k = 30.44 / 7; if (p != null) r.pctVol = Math.round((el.dataset.v === 'sem' ? p / k : p * k) * 1000) / 1000; r.volUnit = el.dataset.v; commit(); },
     useQ() {
       const a = A(), q = a.q, r = a.req;
@@ -3633,6 +3676,19 @@
       }, 'Copiar');
     },
     // Objetivos de la etapa (pestaña Planificación)
+    // Copia en la etapa lo que la calculadora (Plan › Requerimientos) da en este momento para cada tipo de día.
+    pullReqs(el) {
+      const a = A(), i = +el.dataset.i, s = stagesOf(a)[i]; if (!s) return;
+      const rc = reqCalc(a), got = a.dayTypes.map((dt) => [dt, calcTargets(a, dt, rc)]).filter(([, t]) => t.ok);
+      if (!got.length) { toast('La calculadora aún no tiene resultados: completa Plan › Requerimientos.'); return; }
+      const apply = () => {
+        if (!isPlain(s.reqs)) s.reqs = {};
+        got.forEach(([dt, t]) => { s.reqs[dt.id] = roundReq(t); });
+        closeModal(); toast(`Requerimientos traídos a E${i + 1} «${s.tipo}».`); commit();
+      };
+      if (stageHasReqs(a, s)) confirmModal('Traer requerimientos', `Se reemplazarán los requerimientos anotados en <b>E${i + 1} «${esc(s.tipo)}»</b> por los de la calculadora:<br>${got.map(([dt, t]) => `<b>${esc(dt.name)}</b>: ${calcLine(t)}`).join('<br>')}`, apply, 'Reemplazar');
+      else apply();
+    },
     // Etapas del proceso (Plan › Planificación › Configuración del proceso)
     addStage(el) {
       const st = stagesOf(A()), ends = st.filter(stageDated).map((x) => x.fin).sort();
@@ -3797,11 +3853,8 @@
     },
     resetBuscado(el) { const w = A().tracking.weeks[el.dataset.k]; if (w) delete w.buscado; commit(); },
     fillMacros(el) {
-      const a = A(), k = el.dataset.k, rc = reqCalc(a);
-      const tr = a.dayTypes.find((d) => /entren/i.test(d.name)) || a.dayTypes[0];
-      const rs = a.dayTypes.find((d) => /descans/i.test(d.name)) || a.dayTypes[1] || a.dayTypes[0];
-      setP(`tracking.weeks.${k}.macrosE`, macroStr(dayTargets(a, tr, rc)));
-      setP(`tracking.weeks.${k}.macrosD`, macroStr(dayTargets(a, rs, rc)));
+      const a = A(), k = el.dataset.k, pm = planMacros(a, stageOfWeek(a, +k));
+      setP(`tracking.weeks.${k}.macrosE`, pm.E); setP(`tracking.weeks.${k}.macrosD`, pm.D);
       commit();
     },
     addPhoto(el) { pendingImg = { path: `tracking.weeks.${el.dataset.k}.fotos`, push: true }; $('#file-input').click(); },
@@ -4046,6 +4099,7 @@
   function migrateAthlete(a) {
     const base = newAthlete('');
     a.q = Object.assign(base.q, a.q || {}); a.req = Object.assign(base.req, a.req || {});
+    const reqsSeeded = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.reqsSeeded);
     const hadStages = !!(a.tracking && isPlain(a.tracking.config) && Array.isArray(a.tracking.config.stages));
     a.tracking = a.tracking || base.tracking; a.tracking.config = Object.assign(base.tracking.config, a.tracking.config || {});
     a.tracking.weeks = a.tracking.weeks || {}; a.tracking.daily = a.tracking.daily || {};
@@ -4058,6 +4112,7 @@
     a.calendar = isPlain(a.calendar) ? a.calendar : {};
     fixMealNames(a);
     moveObjetivosToStage(a);
+    if (!reqsSeeded) seedStageReqs(a); else a.tracking.config.stages.forEach((x) => { if (!isPlain(x.reqs)) x.reqs = {}; });
     syncTimeline(a);
     return a;
   }

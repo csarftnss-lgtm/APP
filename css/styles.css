@@ -1597,3 +1597,8 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 
 /* Calendario de alimentación: día que viene de la etapa (no marcado a mano) */
 .fc-day.on.auto { border-style: dashed; background: color-mix(in srgb, var(--dc) 15%, var(--surface)); }
+
+/* Requerimientos de la etapa */
+.req-table td.lbl { white-space: nowrap; font-weight: 600; }
+.req-table .cell { min-width: 86px; }
+.stage-reqs .hint a, .callout a { color: var(--accent-text, var(--accent)); font-weight: 600; }
