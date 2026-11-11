@@ -1544,8 +1544,6 @@ td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
 
 /* ===== Plan › Menú diario: calendario de alimentación ===== */
 .fc-card { margin-bottom: 16px; }
-.fc-yr { display: inline-flex; align-items: center; gap: 2px; }
-.fc-yr b { font-size: 15px; font-variant-numeric: tabular-nums; min-width: 44px; text-align: center; }
 .fc-tools { display: flex; justify-content: space-between; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
 .fc-brushes, .fc-quick { display: flex; flex-wrap: wrap; gap: 6px; }
 .fc-brush { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px 6px 6px; border-radius: 10px; border: 1px solid var(--border-2); background: var(--bg-2); color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
@@ -1555,16 +1553,25 @@ td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
 .fc-brush .sw { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; font-size: 11px; font-weight: 700; color: var(--text); background: color-mix(in srgb, var(--dc) 38%, var(--surface)); border: 1px solid var(--dc); }
 .fc-brush .sw.clear { background: repeating-linear-gradient(45deg, transparent 0 4px, var(--border-2) 4px 5px); border: 1px dashed var(--border-2); }
 .fc-brush.add { padding-left: 10px; border-style: dashed; color: var(--muted); }
-.fc-year { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px 22px; user-select: none; -webkit-user-select: none; }
-@media (max-width: 1180px) { .fc-year { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 820px) { .fc-year { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 480px) { .fc-year { grid-template-columns: minmax(0, 1fr); } }
-.fc-mname { font-size: 12.5px; font-weight: 650; color: var(--text); margin-bottom: 6px; }
-.fc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
-.fc-dow { font-size: 10px; color: var(--muted); text-align: center; font-weight: 600; padding-bottom: 2px; }
-.fc-day { position: relative; aspect-ratio: 1; min-height: 26px; display: grid; place-items: center; border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; padding: 0; line-height: 1; }
+.fc-nav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fc-title { min-width: 170px; text-align: center; font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
+.fc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; max-width: 760px; user-select: none; -webkit-user-select: none; }
+.fc-dow { font-size: 11px; color: var(--muted); text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding-bottom: 2px; }
+.fc-day { position: relative; height: 58px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 2px; padding: 6px 7px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text-2); font: inherit; cursor: pointer; text-align: left; min-width: 0; }
 .fc-day:hover { border-color: var(--border-2); color: var(--text); }
-.fc-day.on { background: color-mix(in srgb, var(--dc) 34%, var(--surface)); border-color: var(--dc); color: var(--text); font-weight: 600; }
-.fc-day i { position: absolute; right: 2px; bottom: 1px; font-style: normal; font-size: 8px; font-weight: 700; opacity: .85; }
-.fc-day.today { box-shadow: 0 0 0 2px var(--accent); }
+.fc-day .n { font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
+.fc-day .t { max-width: 100%; font-size: 10.5px; font-weight: 600; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fc-day .i { display: none; font-size: 10px; font-weight: 700; }
+.fc-day.on { background: color-mix(in srgb, var(--dc) 34%, var(--surface)); border-color: var(--dc); color: var(--text); }
+/* Hoy: el número en el color de acento y la palabra «Hoy» (no un borde, para no confundirlo con un día marcado). */
+.fc-day.today .n { color: var(--accent-text, var(--accent)); }
+.fc-day em { position: absolute; top: 6px; right: 7px; font-style: normal; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-text, var(--accent)); }
+@media (max-width: 560px) {
+  .fc-grid { gap: 4px; }
+  .fc-day { height: 50px; padding: 5px; align-items: center; justify-content: center; }
+  .fc-day .t { display: none; }
+  .fc-day .i { display: block; }
+  .fc-day em { position: static; font-size: 8.5px; }
+  .fc-title { min-width: 0; flex: 1; font-size: 19px; }
+}
 .fc-day:focus-visible, .fc-brush:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

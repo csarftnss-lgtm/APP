@@ -1977,37 +1977,43 @@
     return { train, rest };
   }
   let fcFolded = lsGet('prepcoach-calfold') === '1';
-  const fcYear = () => T.fcYear || new Date().getFullYear();
+  // Mes visible del calendario ('aaaa-mm'): siempre parte en el mes actual; las flechas solo cambian la vista.
+  const fcMonth = () => T.fcMonth || todayISO().slice(0, 7);
+  const fcShift = (ym, n) => { const [y, m] = ym.split('-').map(Number), d = new Date(y, m - 1 + n, 1, 12); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const fcBrushOf = (a) => (T.fcBrush === 'clear' ? 'clear' : a.dayTypes.some((x) => x.id === T.fcBrush) ? T.fcBrush : a.dayTypes[0].id);
   function fcDayBtn(a, iso, today) {
-    const dt = calType(a, iso), dn = +iso.slice(8);
-    const lab = `${DAYS[parseISO(iso).getDay()]} ${fmtDate(iso)}${dt ? ' · ' + dt.name : ' · sin asignar'}`;
-    return `<button type="button" class="fc-day${dt ? ' on' : ''}${iso === today ? ' today' : ''}" data-fc="${iso}"${dt ? ` style="--dc:${esc(dt.color || 'var(--accent)')}"` : ''} title="${esc(lab)}" aria-label="${esc(lab)}">${dn}${dt ? `<i>${esc(dtInitial(dt))}</i>` : ''}</button>`;
+    const dt = calType(a, iso), dn = +iso.slice(8), isToday = iso === today;
+    const lab = `${DAYS[parseISO(iso).getDay()]} ${fmtDate(iso)}${isToday ? ' (hoy)' : ''}${dt ? ' · ' + dt.name : ' · sin asignar'}`;
+    return `<button type="button" class="fc-day${dt ? ' on' : ''}${isToday ? ' today' : ''}" data-fc="${iso}"${dt ? ` style="--dc:${esc(dt.color || 'var(--accent)')}"` : ''} title="${esc(lab)}" aria-label="${esc(lab)}">`
+      + `<span class="n">${dn}</span>${isToday ? '<em>Hoy</em>' : ''}${dt ? `<span class="t">${esc(dt.name)}</span><span class="i">${esc(dtInitial(dt))}</span>` : ''}</button>`;
   }
   function feedCalendar(a) {
-    const y = fcYear(), cal = calOf(a), today = todayISO(), brush = fcBrushOf(a);
-    const counts = {}; Object.keys(cal).forEach((d) => { if (d.startsWith(`${y}-`) && calType(a, d)) counts[cal[d]] = (counts[cal[d]] || 0) + 1; });
-    const total = Object.values(counts).reduce((x, n) => x + n, 0);
+    const ym = fcMonth(), [y, m] = ym.split('-').map(Number), cal = calOf(a), today = todayISO(), brush = fcBrushOf(a);
+    const counts = {}; Object.keys(cal).forEach((d) => { if (d.startsWith(`${ym}-`) && calType(a, d)) counts[cal[d]] = (counts[cal[d]] || 0) + 1; });
+    const total = Object.values(counts).reduce((x, n) => x + n, 0), mName = `${CAL_M[m - 1]} ${y}`;
     const bBtn = (id, label, sw, n) => `<button type="button" class="fc-brush${brush === id ? ' on' : ''}" data-action="fcBrush" data-id="${esc(id)}" aria-pressed="${brush === id}">${sw}${esc(label)}${n != null ? `<small>${n}</small>` : ''}</button>`;
     const brushes = a.dayTypes.map((dt) => bBtn(dt.id, dt.name, `<span class="sw" style="--dc:${esc(dt.color || 'var(--accent)')}">${esc(dtInitial(dt))}</span>`, counts[dt.id] || 0)).join('')
       + bBtn('clear', 'Quitar', '<span class="sw clear"></span>')
       + (a.dayTypes.length < 3 ? `<button type="button" class="fc-brush add" data-action="addDayType">${ic('plus', 13)} Tercer tipo de día</button>` : '');
-    const months = CAL_M.map((mn, m) => {
-      const lead = (new Date(y, m, 1, 12).getDay() + 6) % 7, nd = new Date(y, m + 1, 0).getDate();
-      let cells = '<span class="fc-blank"></span>'.repeat(lead);
-      for (let d = 1; d <= nd; d++) cells += fcDayBtn(a, `${y}-${pad(m + 1)}-${pad(d)}`, today);
-      return `<div class="fc-month"><div class="fc-mname">${mn}</div><div class="fc-grid">${DOW_L.map((l) => `<span class="fc-dow">${l}</span>`).join('')}${cells}</div></div>`;
-    }).join('');
+    const lead = (new Date(y, m - 1, 1, 12).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate();
+    let cells = '<span class="fc-blank"></span>'.repeat(lead);
+    for (let d = 1; d <= nd; d++) cells += fcDayBtn(a, `${ym}-${pad(d)}`, today);
+    const isNow = ym === today.slice(0, 7);
     return `<section class="card fc-card no-print" id="feed-cal" aria-label="Calendario de alimentación">
-      <div class="card-head"><h3>Calendario de alimentación</h3><span class="sub">${total ? `${total} ${total === 1 ? 'día asignado' : 'días asignados'} en ${y}` : 'Asigna a cada día su tipo de alimentación'}</span><span class="spacer"></span>
-        <div class="fc-yr"><button type="button" class="btn sm ghost icon" data-action="fcYear" data-d="-1" aria-label="Año anterior">${ic('chevL', 15)}</button><b>${y}</b><button type="button" class="btn sm ghost icon" data-action="fcYear" data-d="1" aria-label="Año siguiente">${ic('chevR', 15)}</button></div>
+      <div class="card-head"><h3>Calendario de alimentación</h3><span class="sub">${total ? `${total} ${total === 1 ? 'día asignado' : 'días asignados'} en ${CAL_M[m - 1].toLowerCase()}` : 'Asigna a cada día su tipo de alimentación'}</span><span class="spacer"></span>
         <button type="button" class="btn sm ghost" data-action="fcFold" aria-expanded="${!fcFolded}">${ic(fcFolded ? 'arrowDown' : 'arrowUp', 14)} ${fcFolded ? 'Mostrar' : 'Ocultar'}</button></div>
       ${fcFolded ? '' : `<div class="card-body">
         <div class="fc-tools"><div class="fc-brushes" role="group" aria-label="Tipo de día a aplicar">${brushes}</div>
           <div class="fc-quick"><button type="button" class="btn sm" data-action="fcFill" title="Llena los días sin asignar de cada etapa con sus días de entrenamiento (Seguimiento › Configuración)">${ic('cal', 14)} Completar con Configuración</button>
-            <button type="button" class="btn sm ghost danger" data-action="fcClear" ${total ? '' : 'disabled'}>Vaciar ${y}</button></div></div>
-        <div class="hint mt8">Elige un tipo de día y toca los días (o arrastra sobre varios). Tocar un día que ya tiene ese tipo lo deja sin asignar. El calendario sale en el documento que se descarga y define las comidas de «Hambre» en el registro diario.</div>
-        <div class="fc-year mt16">${months}</div>
+            <button type="button" class="btn sm ghost danger" data-action="fcClear" ${total ? '' : 'disabled'}>Vaciar ${CAL_M[m - 1].toLowerCase()}</button></div></div>
+        <div class="fc-nav mt16">
+          <button type="button" class="btn sm icon" data-action="fcMonth" data-d="-1" aria-label="Mes anterior" title="Mes anterior">${ic('chevL', 16)}</button>
+          <div class="fc-title" aria-live="polite">${mName}</div>
+          <button type="button" class="btn sm icon" data-action="fcMonth" data-d="1" aria-label="Mes siguiente" title="Mes siguiente">${ic('chevR', 16)}</button>
+          ${isNow ? '' : '<button type="button" class="btn xs ghost" data-action="fcToday">Volver al mes actual</button>'}
+        </div>
+        <div class="fc-grid mt8">${DOW_N.map((l) => `<span class="fc-dow" title="${l}">${l.slice(0, 3)}</span>`).join('')}${cells}</div>
+        <div class="hint mt12">Elige un tipo de día y toca los días (o arrastra sobre varios). Tocar un día que ya tiene ese tipo lo deja sin asignar. Las asignaciones quedan guardadas al cambiar de mes. El calendario sale en el documento que se descarga y define las comidas de «Hambre» en el registro diario.</div>
       </div>`}
     </section>`;
   }
@@ -3512,7 +3518,8 @@
 
     setDay(el) { A().activeDay = el.dataset.id; commit(); },
     // Calendario de alimentación (Menú diario)
-    fcYear(el) { T.fcYear = fcYear() + (+el.dataset.d || 0); render(); },
+    fcMonth(el) { T.fcMonth = fcShift(fcMonth(), +el.dataset.d || 0); render(); },
+    fcToday() { T.fcMonth = null; render(); },
     fcBrush(el) { T.fcBrush = el.dataset.id; render(); },
     fcFold() { fcFolded = !fcFolded; lsSet('prepcoach-calfold', fcFolded ? '1' : '0'); render(); },
     fcFill() {
@@ -3525,8 +3532,8 @@
       commit();
     },
     fcClear() {
-      const a = A(), y = fcYear(), cal = calOf(a), ks = Object.keys(cal).filter((d) => d.startsWith(`${y}-`));
-      confirmModal('Vaciar calendario', `Se quitará el tipo de día de los <b>${ks.length}</b> días asignados en ${y}.`, () => { ks.forEach((d) => { delete cal[d]; }); closeModal(); commit(); }, 'Vaciar');
+      const a = A(), ym = fcMonth(), cal = calOf(a), ks = Object.keys(cal).filter((d) => d.startsWith(`${ym}-`)), mn = `${CAL_M[+ym.slice(5) - 1].toLowerCase()} de ${ym.slice(0, 4)}`;
+      confirmModal('Vaciar mes', `Se quitará el tipo de día de los <b>${ks.length}</b> días asignados en ${mn}. Los demás meses no cambian.`, () => { ks.forEach((d) => { delete cal[d]; }); closeModal(); commit(); }, 'Vaciar');
     },
     addDayType() {
       promptModal('Nuevo tipo de día', `${F('Nombre', '<input class="input" id="m-name" placeholder="Ej.: Recarga, Día alto, Competencia">')}
