@@ -1578,3 +1578,9 @@ td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
 
 /* Tarjeta «Siguiente apartado» como botón (Seguimiento) */
 button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointer; }
+
+/* Plan › Planificación: bloques «Configuración del proceso» y «Etapa en curso y objetivos» */
+.pf-block-head { margin: 0 0 12px; }
+.pf-block-head h2 { margin: 0; font-family: var(--font-display); font-size: 21px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
+.pf-block-head p { margin: 2px 0 0; }
+.pf-block .stage-card:first-of-type { margin-top: 16px; }

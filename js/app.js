@@ -158,7 +158,7 @@
   };
   // Pestaña «Planificación»: objetivo de la etapa, fechas y lista de objetivos (parte con 4 en blanco).
   const newPlanif = () => ({ objetivo: '', inicio: '', termino: '', objetivos: ['', '', '', ''] });
-  // Etapa del proceso (Seguimiento › Configuración). diasEntreno y diasPeso: 0 = lunes … 6 = domingo.
+  // Etapa del proceso (Plan › Planificación › Configuración del proceso). diasEntreno y diasPeso: 0 = lunes … 6 = domingo.
   // objetivo: % semanal del peso (siempre positivo; el signo lo da el tipo de etapa).
   const newStage = (tipo = '', o = {}) => Object.assign({ id: uid(), tipo, inicio: '', fin: '', pesoInicial: null, grasaInicial: null,
     diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
@@ -814,7 +814,7 @@
   const weekLabel = (k) => (k === 0 ? 'Semana inicial' : `Semana ${k}`);
   const wk = (a, k) => a.tracking.weeks[k] || {};
   const dailyOf = (a, d) => a.tracking.daily[d] || {};
-  // ---- Etapas del proceso (Seguimiento › Configuración) ----
+  // ---- Etapas del proceso (Plan › Planificación › Configuración del proceso) ----
   // Las fechas de las etapas mandan: arman el calendario del registro diario y del seguimiento semanal,
   // y definen la etapa y el % buscado de cada semana. Una semana marcada a mano con otra etapa genera una alerta.
   const stagesOf = (a) => { const c = cfgOf(a); if (!Array.isArray(c.stages)) c.stages = []; return c.stages; };
@@ -837,7 +837,7 @@
     const s = stageOfWeek(a, k); if (s) return s.tipo;
     return stagesOf(a).some(stageDated) ? 'Sin etapa' : (cfgOf(a).etapa || '');
   }
-  // Semana marcada a mano con una etapa distinta de la que dicen las fechas de Configuración.
+  // Semana marcada a mano con una etapa distinta de la que dicen las fechas de las etapas.
   function etapaMismatch(a, k) { const own = wk(a, k).etapa, s = stageOfWeek(a, k); return own && s && own !== s.tipo ? s : null; }
   function mismatchWeeks(a) { const out = []; for (let k = 0; k <= weekCount(a); k++) { const s = etapaMismatch(a, k); if (s) out.push({ k, own: wk(a, k).etapa, s }); } return out; }
   // Duración contando el primer y el último día: «12 semanas», «5 semanas y 3 días»…
@@ -901,11 +901,8 @@
       const off = daysBetween(c0, s.inicio);
       if (off > 0 && off % 7) { const k = Math.floor(off / 7), ow = stageOfWeek(a, k); out.push(`${name(s)} empieza un ${DOW_N[dow(s.inicio)].toLowerCase()}, a mitad de la ${weekLabel(k).toLowerCase()} del registro (que parte el ${fmtDate(weekStart(a, k))}): esa semana queda como «${esc(ow ? ow.tipo : '—')}».`); }
     });
-    const pm = planifMismatch(a), pf = planifOf(a);
-    if (pm) out.push(pm.kind !== 'dates' ? `Plan › Planificación indica la etapa «${esc(pf.objetivo)}», que no está en esta lista.`
-      : `Plan › Planificación indica «${esc(pf.objetivo)}» del ${rangeTxt(pf.inicio, pf.termino)}, pero aquí la etapa ${pm.i + 1} va del ${rangeTxt(pm.s.inicio, pm.s.fin)}.`);
     const mm = mismatchWeeks(a);
-    if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de Configuración.`);
+    if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de las etapas.`);
     return out;
   }
   function weekWeights(a, k) { return weekDays(a, k).map((d) => num(dailyOf(a, d).peso)).filter((v) => v != null); }
@@ -1498,7 +1495,7 @@
   // Vista — planificación
   // =====================================================================
   // El acceso del cliente ya no es una sección de Seguimiento: vive en el inicio (homeAccess).
-  const SEG_TABS = [['panel', 'Panel'], ['diario', 'Registro diario de peso'], ['semanal', 'Seguimiento semanal'], ['guia', 'Instrucciones y escalas'], ['config', 'Configuración']];
+  const SEG_TABS = [['panel', 'Panel'], ['diario', 'Registro diario de peso'], ['semanal', 'Seguimiento semanal'], ['guia', 'Instrucciones y escalas']]; // la configuración del proceso está en Plan › Planificación
   const CLIENT_SEG_TABS = SEG_TABS.filter(([k]) => k !== 'config');
   const PLAN_NAV = [
     ['Plan', [['req', 'Requerimientos', 'calc'], ['planif', 'Planificación', 'target'], ['menu', 'Menú diario', 'menu'], ['dist', 'Distribución de comidas', 'clock'], ['minuta', 'Minuta', 'down']]],
@@ -1510,14 +1507,14 @@
   // Orden de los apartados de Plan: al final de cada uno, una tarjeta lleva al siguiente (y la última, a Seguimiento).
   const PLAN_FLOW = [
     ['req', 'Requerimientos', 'calc', 'Gasto energético, objetivo y macros de cada tipo de día.'],
-    ['planif', 'Planificación', 'target', 'Objetivo de la etapa, fechas, objetivos y mini cut.'],
+    ['planif', 'Planificación', 'target', 'Configuración del proceso (etapas), etapa en curso, objetivos y mini cut.'],
     ['menu', 'Menú diario', 'menu', 'Calendario de alimentación y comidas de cada tipo de día.'],
     ['dist', 'Distribución de comidas', 'clock', 'Horarios e indicaciones de cada comida.'],
     ['minuta', 'Descargar planificación', 'down', 'Vista previa y descarga del documento en PDF.'],
   ];
   function nextStepCard(tab) {
     const i = PLAN_FLOW.findIndex(([k]) => k === tab); if (i < 0) return '';
-    const nx = PLAN_FLOW[i + 1] || [null, 'Seguimiento', 'chart', 'Panel, registro diario, seguimiento semanal y configuración de etapas.'];
+    const nx = PLAN_FLOW[i + 1] || [null, 'Seguimiento', 'chart', 'Panel, registro diario de peso, seguimiento semanal e instrucciones.'];
     const href = nx[0] ? `#/plan/${nx[0]}` : '#/seg';
     return `<a class="card next-stage no-print" href="${href}" aria-label="Siguiente apartado: ${esc(nx[1])}">
         <span class="ns-ic">${ic(nx[2], 22)}</span>
@@ -1547,13 +1544,12 @@
 
   // Apartado Seguimiento: mismo esqueleto que Planificación, con su propio panel lateral.
   // Orden de los apartados de Seguimiento (el del panel lateral): al final de cada uno, una tarjeta lleva al siguiente;
-  // Configuración, el último, devuelve al Panel.
+  // el último devuelve al Panel.
   const SEG_FLOW = [
     ['panel', 'Panel', 'chart', 'Cómo va la semana: peso, cambio frente a la meta, pasos y escalas.'],
     ['diario', 'Registro diario de peso', 'edit', 'Peso, pasos, escalas, hambre y medidas de cada día.'],
     ['semanal', 'Seguimiento semanal', 'clip', 'Promedios, % buscado y logrado, macros y fotos de cada semana.'],
     ['guia', 'Instrucciones y escalas', 'menu', 'Cómo pesarse, medirse y usar las escalas.'],
-    ['config', 'Configuración', 'target', 'Etapas, fechas, metas y gráficos de cada etapa.'],
   ];
   function nextSegCard(tab) {
     const i = SEG_FLOW.findIndex(([k]) => k === tab); if (i < 0) return '';
@@ -1789,11 +1785,11 @@
   function planifDuration(p) {
     if (!parseISO(p.inicio) || !parseISO(p.termino)) return null;
     const d0 = daysBetween(p.inicio, p.termino); if (d0 < 0) return null;
-    const d = d0 + 1; // se cuentan el primer y el último día, igual que en las etapas de Seguimiento › Configuración
+    const d = d0 + 1; // se cuentan el primer y el último día, igual que en las etapas de la configuración del proceso
     const w = Math.floor(d / 7), r = d % 7, pl = (n, s, pls) => `${n} ${n === 1 ? s : pls}`;
     return w && r ? `${pl(w, 'semana', 'semanas')} y ${pl(r, 'día', 'días')}` : w ? pl(w, 'semana', 'semanas') : pl(r, 'día', 'días');
   }
-  // Etapa de Seguimiento › Configuración que corresponde a la de Planificación: mismo objetivo; si hay varias,
+  // Etapa de la configuración del proceso que corresponde a la de «Etapa» (01): mismo objetivo; si hay varias,
   // la de fechas iguales, luego la que se cruza con estas fechas, luego la primera.
   function planifStage(a) {
     const p = planifOf(a); if (!p.objetivo) return null;
@@ -1816,20 +1812,21 @@
     const p = planifOf(a), mm = planifMismatch(a); if (!mm) return '';
     const here = parseISO(p.inicio) || parseISO(p.termino) ? `aquí <b>${rangeTxt(p.inicio, p.termino)}</b>` : 'aquí aún no hay fechas';
     const body = mm.kind === 'notlist'
-      ? `«${esc(p.objetivo)}» se escribió a mano y no es uno de los objetivos de la lista. Elige el que corresponda para que coincida con las etapas de Seguimiento › Configuración.`
+      ? `«${esc(p.objetivo)}» se escribió a mano y no es uno de los objetivos de la lista. Elige el que corresponda para que coincida con las etapas de la configuración del proceso (arriba).`
       : mm.kind === 'nostage'
-      ? `«${esc(p.objetivo)}» no está entre las etapas de Seguimiento › Configuración.`
-      : `Las fechas no coinciden con la etapa ${mm.i + 1} «${esc(mm.s.tipo)}» de Seguimiento › Configuración: ${here}; en Configuración <b>${rangeTxt(mm.s.inicio, mm.s.fin)}</b>.`;
+      ? `«${esc(p.objetivo)}» no está entre las etapas de la configuración del proceso (arriba).`
+      : `Las fechas no coinciden con la etapa ${mm.i + 1} «${esc(mm.s.tipo)}» de la configuración del proceso (arriba): ${here}; allá <b>${rangeTxt(mm.s.inicio, mm.s.fin)}</b>.`;
     const btns = mm.kind === 'notlist' ? '' : mm.kind === 'nostage'
       ? `<button class="btn sm" data-action="planifAddStage">${ic('plus', 14)} Agregar la etapa «${esc(p.objetivo)}» con estas fechas</button>`
-      : `${stageDated(mm.s) ? `<button class="btn sm" data-action="planifUseStage">Usar las fechas de Configuración</button>` : ''}${parseISO(p.inicio) && parseISO(p.termino) ? `<button class="btn sm ghost" data-action="planifToStage">Llevar estas fechas a Configuración</button>` : ''}`;
+      : `${stageDated(mm.s) ? `<button class="btn sm" data-action="planifUseStage">Usar las fechas de la configuración</button>` : ''}${parseISO(p.inicio) && parseISO(p.termino) ? `<button class="btn sm ghost" data-action="planifToStage">Llevar estas fechas a la configuración</button>` : ''}`;
     return `<div class="callout alert-callout mt12" role="alert"><b>La etapa no coincide.</b> ${body}<div class="row mt8" style="gap:8px;flex-wrap:wrap">${btns}</div></div>`;
   }
   function viewPlanif() {
     const a = A(), p = planifOf(a), dur = planifDuration(p), n = p.objetivos.length;
     const inverted = parseISO(p.inicio) && parseISO(p.termino) && daysBetween(p.inicio, p.termino) < 0;
     const date = (k, label) => `<div class="field"><label for="pf-${k}">${label}</label>${D(`planif.${k}`, `pf-${k}`)}</div>`;
-    return `
+    return `${processConfig(a)}
+    <div class="pf-block-head mt24"><h2>Etapa en curso y objetivos</h2><p class="muted small">Lo que sale en el documento que se descarga.</p></div>
     <section class="card">
       <div class="card-head"><span class="sec-num">01</span><h3>Etapa</h3><span class="sub">Qué se busca y en qué plazo</span></div>
       <div class="card-body">
@@ -1856,7 +1853,7 @@
   }
 
   // ---------------- Mini cut ----------------
-  // Fase corta de déficit. Es la misma etapa «Mini cut» de Seguimiento › Configuración: fechas y % se comparten.
+  // Fase corta de déficit. Es la misma etapa «Mini cut» de la configuración del proceso: fechas y % se comparten.
   // Si hay varias, se muestra la que está en curso, si no la próxima, si no la última.
   function miniCutStage(a) {
     const ms = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => x.s.tipo === 'Mini cut');
@@ -1909,7 +1906,7 @@
   function viewMiniCut(cls = '') {
     const a = A(), ms = miniCutStage(a);
     const head = `<div class="card-head"><span class="sec-num">03</span><h3>Mini cut</h3><span class="sub">Fase corta de déficit: plazo, meta y avance</span></div>`;
-    if (!ms) return `<section class="card ${cls}" id="minicut">${head}<div class="card-body"><div class="muted center" style="padding:18px">No hay una etapa de Mini cut en «Seguimiento › Configuración».</div>
+    if (!ms) return `<section class="card ${cls}" id="minicut">${head}<div class="card-body"><div class="muted center" style="padding:18px">No hay una etapa de Mini cut en la configuración del proceso (arriba).</div>
       <div class="center"><button class="btn primary sm" data-action="addStage" data-tipo="Mini cut">${ic('plus', 14)} Agregar etapa Mini cut</button></div></div></section>`;
     const c = miniCutCalc(a, ms.s), m = c.m, sp = `tracking.config.stages.${ms.i}`;
     const date = (k, f, label) => `<div class="field"><label for="mc-${k}">${label}</label>${D(`${sp}.${f}`, `mc-${k}`)}</div>`;
@@ -1965,7 +1962,7 @@
           ${date('termino', 'fin', 'Fecha final')}
           ${F('% de pérdida de grasa buscado', suffix(I(`${sp}.objetivo`, { num: true, live: true, ph: 'Ej.: 1' }), '% / sem'), 'Del peso corporal, por semana. En un mini cut suele ser 0,75–1,25 %.')}
         </div>
-        <div class="hint mt8">Son los mismos datos de la etapa ${ms.i + 1} «Mini cut» en Seguimiento › Configuración: lo que cambies aquí se ve allá y en el registro.</div>
+        <div class="hint mt8">Son los mismos datos de la etapa ${ms.i + 1} «Mini cut» de la configuración del proceso (arriba): lo que cambies aquí se ve allá y en el registro.</div>
         ${note}
         <div class="mt16">${body}</div>
       </div>
@@ -2078,7 +2075,7 @@
         <button type="button" class="btn sm ghost" data-action="fcFold" aria-expanded="${!fcFolded}">${ic(fcFolded ? 'arrowDown' : 'arrowUp', 14)} ${fcFolded ? 'Mostrar' : 'Ocultar'}</button></div>
       ${fcFolded ? '' : `<div class="card-body">
         <div class="fc-tools"><div class="fc-brushes" role="group" aria-label="Tipo de día a aplicar">${brushes}</div>
-          <div class="fc-quick"><button type="button" class="btn sm" data-action="fcFill" title="Llena los días sin asignar de cada etapa con sus días de entrenamiento (Seguimiento › Configuración)">${ic('cal', 14)} Completar con Configuración</button>
+          <div class="fc-quick"><button type="button" class="btn sm" data-action="fcFill" title="Llena los días sin asignar de cada etapa con sus días de entrenamiento (Plan › Planificación)">${ic('cal', 14)} Completar con las etapas</button>
             <button type="button" class="btn sm ghost danger" data-action="fcClear" ${total ? '' : 'disabled'}>Vaciar ${CAL_M[m - 1].toLowerCase()}</button></div></div>
         <div class="fc-nav mt16">
           <button type="button" class="btn sm icon" data-action="fcMonth" data-d="-1" aria-label="Mes anterior" title="Mes anterior">${ic('chevL', 16)}</button>
@@ -2195,7 +2192,7 @@
   // ---------------- Seguimiento ----------------
   function viewSeg() {
     const a = A(), tab = a.ui.trackTab || 'panel';
-    const v = { panel: segPanel, diario: segDaily, semanal: segWeekly, guia: segGuide, config: segConfig };
+    const v = { panel: segPanel, diario: segDaily, semanal: segWeekly, guia: segGuide };
     return (v[tab] || segPanel)(a);
   }
 
@@ -2313,26 +2310,26 @@
     }).join('')}</select>`;
   }
 
-  // Etapa de la semana: por defecto la que dicen las fechas de Configuración; se puede marcar otra a mano
-  // (queda la alerta «No coincide» con opción de volver a Configuración).
+  // Etapa de la semana: por defecto la que dicen las fechas de las etapas (Plan › Planificación); se puede marcar otra
+  // a mano (queda la alerta «No coincide» con opción de volver a las fechas de las etapas).
   function etapaCell(a, k, cls = 'cell', tag = false) {
     const own = wk(a, k).etapa || '', der = stageOfWeek(a, k), mm = etapaMismatch(a, k);
     if (isClientView()) return `${esc(weekEtapa(a, k))}${mm ? ' <span class="busc-tag manual" style="display:inline-block;margin:0 0 0 6px">No coincide</span>' : ''}`;
     const opts = [['', der ? der.tipo : 'Sin etapa'], ...(own && !ETAPAS.includes(own) ? [own] : []), ...ETAPAS.filter((x) => !(x === (der && der.tipo) && !own))];
     return `${SEL(`tracking.weeks.${k}.etapa`, opts, { cls, attrs: `aria-label="Etapa de la ${weekLabel(k).toLowerCase()}"` })}${mm
-      ? `<button type="button" class="busc-tag manual" data-action="resetEtapa" data-k="${k}" title="No coincide con Configuración: según las fechas esta semana es «${esc(mm.tipo)}». Toca para usar Configuración.">No coincide ↺</button>`
-      : tag && !own && der ? '<span class="busc-tag" title="Etapa según las fechas de Seguimiento › Configuración">Config.</span>' : ''}`;
+      ? `<button type="button" class="busc-tag manual" data-action="resetEtapa" data-k="${k}" title="No coincide con las etapas de Plan › Planificación: según sus fechas esta semana es «${esc(mm.tipo)}». Toca para usar esa etapa.">No coincide ↺</button>`
+      : tag && !own && der ? '<span class="busc-tag" title="Etapa según las fechas de Plan › Planificación">Etapa</span>' : ''}`;
   }
   // Aviso arriba del registro y del seguimiento semanal cuando hay semanas marcadas con otra etapa.
   function mismatchCallout(a) {
     const mm = mismatchWeeks(a); if (!mm.length) return '';
-    return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Las etapas no coinciden con Configuración.</b>
+    return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Las etapas no coinciden con Plan › Planificación.</b>
       ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} está marcada como «${esc(x.own)}», pero según las fechas corresponde a «${esc(x.s.tipo)}»`).join('; ')}${mm.length > 6 ? '…' : ''}.
-      ${isClientView() ? '' : `<div class="mt8"><button class="btn sm" data-action="applyStageDates">Usar las fechas de Configuración</button></div>`}</div>`;
+      ${isClientView() ? '' : `<div class="mt8"><button class="btn sm" data-action="applyStageDates">Usar las fechas de las etapas</button></div>`}</div>`;
   }
 
   // Tipo de día de la minuta que corresponde a una fecha: el del calendario de alimentación (Menú diario); si no está,
-  // lo anotado en «Entreno» (sí / no); si tampoco, los días de entrenamiento de la etapa en Configuración. null si no se sabe.
+  // lo anotado en «Entreno» (sí / no); si tampoco, los días de entrenamiento de la etapa (Plan › Planificación). null si no se sabe.
   function dayTypeFor(a, d) {
     const dts = a.dayTypes || []; if (!dts.length) return null;
     const cd = calType(a, d); if (cd) return { dt: cd, src: 'Según el calendario de alimentación (Plan › Menú diario)' };
@@ -2340,14 +2337,14 @@
     const e = dailyOf(a, d).entreno;
     if (e === 'si' || e === 'no') return { dt: e === 'si' ? train : rest, src: 'Según lo anotado en «Entreno»' };
     const s = stageOfDay(a, d);
-    if (s && (s.diasEntreno || []).length) return { dt: s.diasEntreno.includes(dow(d)) ? train : rest, src: 'Según los días de entrenamiento de la etapa (Configuración)' };
+    if (s && (s.diasEntreno || []).length) return { dt: s.diasEntreno.includes(dow(d)) ? train : rest, src: 'Según los días de entrenamiento de la etapa (Plan › Planificación)' };
     return null;
   }
   // Tipo de día y días de pesaje que define la etapa.
   function dayTags(a, d) {
     const t = [], s = stageOfDay(a, d), td = dayTypeFor(a, d);
     if (td) t.push(`<span class="day-tag dtype" style="--dc:${esc(td.dt.color || 'var(--muted)')}" title="${esc(td.src)}">${esc(td.dt.name)}</span>`);
-    if (s && (s.diasPeso || []).includes(dow(d))) t.push('<span class="day-tag peso" title="Día de reporte de peso (Configuración)">Pesaje</span>');
+    if (s && (s.diasPeso || []).includes(dow(d))) t.push('<span class="day-tag peso" title="Día de reporte de peso (Plan › Planificación)">Pesaje</span>');
     return t.length ? `<span class="day-tags">${t.join('')}</span>` : '';
   }
   // Celda de hambre: muestra la comida de ese tipo de día en esa posición. Si el tipo de día tiene menos comidas,
@@ -2441,13 +2438,13 @@
       const tag = usePlan ? `<span class="mac-tag" title="Se toma y actualiza automáticamente desde Plan">${ic('target', 11)} Plan${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
       return `<td class="computed mac mac-sync">${body}${tag}</td>`;
     };
-    // % buscado: muestra el valor de Configuración (objetivo inicial o posterior según la semana);
-    // si se escribe otro valor queda como ajuste manual de esa semana, con opción de volver a Configuración.
+    // % buscado: muestra el valor de la etapa de esa semana (Plan › Planificación);
+    // si se escribe otro valor queda como ajuste manual de esa semana, con opción de volver al de la etapa.
     const buscadoCell = (k) => {
       const own = num(wk(a, k).buscado), cfgV = stageTarget(stageOfWeek(a, k));
       const v = own != null ? own : cfgV;
       return `<td class="pad0 busc-td${own != null ? ' manual' : ''}" style="min-width:96px">${I(`tracking.weeks.${k}.buscado`, { cls: 'cell', num: true, live: true, value: v != null ? v : '', ph: '—', attrs: own == null ? 'data-cfg="1"' : '' })}
-        ${own != null ? `<button type="button" class="busc-tag manual" data-action="resetBuscado" data-k="${k}" title="Ajuste manual de esta semana. Toca para volver al valor de Configuración (${cfgV != null ? fmtS(cfgV) + '%' : '—'})">Manual ↺</button>` : `<span class="busc-tag" title="Valor de la etapa en Seguimiento › Configuración">Config.</span>`}</td>`;
+        ${own != null ? `<button type="button" class="busc-tag manual" data-action="resetBuscado" data-k="${k}" title="Ajuste manual de esta semana. Toca para volver al valor de la etapa (${cfgV != null ? fmtS(cfgV) + '%' : '—'})">Manual ↺</button>` : `<span class="busc-tag" title="Valor de la etapa (Plan › Planificación)">Etapa</span>`}</td>`;
     };
     const roText = (v) => `<td class="computed small" style="white-space:pre-wrap;min-width:170px">${v ? esc(v) : '<span class="muted">—</span>'}</td>`;
     let body = '';
@@ -2645,7 +2642,7 @@
     const sub = stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : s.tipo ? 'Sin fechas: aún no se refleja en el registro' : 'Elige el objetivo de esta etapa';
     let fields = '';
     if (!s.tipo) fields = '<div class="callout small mt16">Selecciona un objetivo para configurar esta etapa.</div>';
-    else if (!full) fields = '<div class="callout small mt16">Configuración pendiente: los campos de esta etapa se definirán más adelante. Sus fechas ya se usan en el registro diario y el seguimiento semanal.</div>';
+    else if (!full) fields = '<div class="callout small mt16">Por configurar: los campos de esta etapa se definirán más adelante. Sus fechas ya se usan en el registro diario y el seguimiento semanal.</div>';
     else {
       const dly = a.tracking.daily || {}, w1 = stageDated(s) ? Object.keys(dly).filter((d) => d >= s.inicio && d < addDays(s.inicio, 7)).map((d) => num(dly[d].peso)).filter((v) => v != null) : [];
       const auto = w1.length ? mean(w1) : eff(a).peso, autoTxt = w1.length ? 'promedio de los pesajes de su 1.ª semana' : 'peso de Requerimientos';
@@ -2664,18 +2661,20 @@
         ${stageChartBlock(a, s, i)}`;
     }
     return `<section class="card mt16 stage-card" id="stage-${s.id}">
-      <div class="card-head"><span class="sec-num">${pad(i + 1)}</span><h3>${esc(s.tipo || 'Nueva etapa')}</h3><span class="sub">${sub}</span><span class="spacer"></span>
+      <div class="card-head"><span class="sec-num" title="Etapa ${i + 1}">E${i + 1}</span><h3>${esc(s.tipo || 'Nueva etapa')}</h3><span class="sub">${sub}</span><span class="spacer"></span>
         <button class="btn xs ghost danger" data-action="delStage" data-i="${i}" title="Eliminar etapa" aria-label="Eliminar etapa ${i + 1}">${ic('trash', 13)}</button></div>
       <div class="card-body">
         <div class="grid g3">${F('Objetivo', SEL(`${p}.tipo`, opts))}${date('inicio', 'Fecha inicial')}${date('fin', 'Fecha final')}</div>
         ${fields}
       </div></section>`;
   }
-  function segConfig(a) {
+  // Configuración del proceso: va al inicio de Plan › Planificación.
+  function processConfig(a) {
     const st = stagesOf(a), al = stageAlerts(a), N = weekCount(a), c0 = cfgOf(a).inicio, dated = st.some(stageDated);
-    return `
+    return `<div class="pf-block" id="config-proceso">
+      <div class="pf-block-head"><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas y gráficos. Sus fechas arman el calendario del registro diario y del seguimiento semanal.</p></div>
     ${al.length ? `<div class="callout alert-callout" role="alert"><b>Revisa las fechas de las etapas</b><ul class="alert-list">${al.map((x) => `<li>${x}</li>`).join('')}</ul>
-      ${mismatchWeeks(a).length ? '<button class="btn sm mt8" data-action="applyStageDates">Usar las fechas de Configuración en todas las semanas</button>' : ''}</div>` : ''}
+      ${mismatchWeeks(a).length ? '<button class="btn sm mt8" data-action="applyStageDates">Usar las fechas de las etapas en todas las semanas</button>' : ''}</div>` : ''}
     <section class="card${al.length ? ' mt16' : ''}"><div class="card-head"><h3>Calendario del seguimiento</h3><span class="sub">${dated ? 'Se arma con las fechas de las etapas' : 'Define las fechas de una etapa para armarlo'}</span></div>
       <div class="card-body grid g3">
         ${F('Semana inicial', `<input class="input" value="${fmtDate(c0)}" disabled>`, 'Primer día de la primera etapa.')}
@@ -2684,7 +2683,7 @@
       </div></section>
     ${st.map((s, i) => stageCard(a, s, i)).join('')}
     <div class="row mt16"><button class="btn primary" data-action="addStage">${ic('plus', 15)} Agregar siguiente etapa</button></div>
-    <div class="callout mt16 small">Las fechas de cada etapa definen la etapa y el % buscado de cada semana en el registro diario y el seguimiento semanal. Si allí marcas una semana con otra etapa, aparece una alerta para que revises cuál es la correcta. El número que manda es el % de cambio semanal del peso promedio: bajar más rápido que el objetivo no es mejor, en una etapa de definición se paga con músculo.</div>`;
+    <div class="callout mt16 small">Las fechas de cada etapa definen la etapa y el % buscado de cada semana en el registro diario y el seguimiento semanal de Seguimiento. Si allí marcas una semana con otra etapa, aparece una alerta para que revises cuál es la correcta. El número que manda es el % de cambio semanal del peso promedio: bajar más rápido que el objetivo no es mejor, en una etapa de definición se paga con músculo.</div></div>`;
   }
 
 
@@ -3599,7 +3598,7 @@
     fcFill() {
       const a = A(), cal = calOf(a), { train, rest } = trainRest(a);
       const st = stagesOf(a).filter((s) => stageDated(s) && (s.diasEntreno || []).length);
-      if (!st.length) { toast('Primero marca los días de entrenamiento de la etapa en Seguimiento › Configuración.'); return; }
+      if (!st.length) { toast('Primero marca los días de entrenamiento de la etapa en Plan › Planificación.'); return; }
       let n = 0;
       st.forEach((s) => { for (let d = s.inicio; d <= s.fin; d = addDays(d, 1)) if (!calType(a, d)) { cal[d] = s.diasEntreno.includes(dow(d)) ? train.id : rest.id; n++; } });
       toast(n ? `${n} ${n === 1 ? 'día asignado' : 'días asignados'} según los días de entrenamiento de las etapas.` : 'No había días sin asignar dentro de las etapas.');
@@ -3691,11 +3690,11 @@
       }, 'Copiar');
     },
     // Objetivos de la etapa (pestaña Planificación)
-    // Planificación ↔ etapas de Configuración
-    planifUseStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; p.inicio = m.s.inicio; p.termino = m.s.fin; toast('Fechas tomadas de Seguimiento › Configuración.'); commit(); },
-    planifToStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; m.s.inicio = p.inicio; m.s.fin = p.termino; toast(`Etapa ${m.i + 1} de Configuración actualizada.`); commit(); },
-    planifAddStage() { const a = A(), p = planifOf(a); stagesOf(a).push(newStage(p.objetivo, { inicio: parseISO(p.inicio) ? p.inicio : '', fin: parseISO(p.termino) ? p.termino : '' })); toast(`Etapa «${p.objetivo}» agregada en Seguimiento › Configuración.`); commit(); },
-    // Etapas del proceso (Seguimiento › Configuración)
+    // «Etapa» (01) ↔ etapas de la configuración del proceso
+    planifUseStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; p.inicio = m.s.inicio; p.termino = m.s.fin; toast('Fechas tomadas de la configuración del proceso.'); commit(); },
+    planifToStage() { const a = A(), p = planifOf(a), m = planifStage(a); if (!m) return; m.s.inicio = p.inicio; m.s.fin = p.termino; toast(`Etapa ${m.i + 1} de la configuración del proceso actualizada.`); commit(); },
+    planifAddStage() { const a = A(), p = planifOf(a); stagesOf(a).push(newStage(p.objetivo, { inicio: parseISO(p.inicio) ? p.inicio : '', fin: parseISO(p.termino) ? p.termino : '' })); toast(`Etapa «${p.objetivo}» agregada en la configuración del proceso.`); commit(); },
+    // Etapas del proceso (Plan › Planificación › Configuración del proceso)
     addStage(el) {
       const st = stagesOf(A()), ends = st.filter(stageDated).map((x) => x.fin).sort();
       const s = newStage(el.dataset.tipo || '', { inicio: ends.length ? addDays(ends[ends.length - 1], 1) : '' });
@@ -3723,7 +3722,7 @@
     applyStageDates() {
       const a = A(), mm = mismatchWeeks(a);
       mm.forEach((x) => { delete a.tracking.weeks[x.k].etapa; });
-      toast(`${mm.length} ${mm.length === 1 ? 'semana vuelve' : 'semanas vuelven'} a la etapa de Configuración.`); commit();
+      toast(`${mm.length} ${mm.length === 1 ? 'semana vuelve' : 'semanas vuelven'} a la etapa de sus fechas.`); commit();
     },
     addObjetivo() {
       const p = planifOf(A()); p.objetivos.push(''); commit();
