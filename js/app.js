@@ -1543,6 +1543,24 @@
   }
 
   // Apartado Seguimiento: mismo esqueleto que Planificación, con su propio panel lateral.
+  // Orden de los apartados de Seguimiento (el del panel lateral): al final de cada uno, una tarjeta lleva al siguiente;
+  // Configuración, el último, devuelve al Panel.
+  const SEG_FLOW = [
+    ['panel', 'Panel', 'chart', 'Cómo va la semana: peso, cambio frente a la meta, pasos y escalas.'],
+    ['diario', 'Registro diario de peso', 'edit', 'Peso, pasos, escalas, hambre y medidas de cada día.'],
+    ['semanal', 'Seguimiento semanal', 'clip', 'Promedios, % buscado y logrado, macros y fotos de cada semana.'],
+    ['guia', 'Instrucciones y escalas', 'menu', 'Cómo pesarse, medirse y usar las escalas.'],
+    ['config', 'Configuración', 'target', 'Etapas, fechas, metas y gráficos de cada etapa.'],
+  ];
+  function nextSegCard(tab) {
+    const i = SEG_FLOW.findIndex(([k]) => k === tab); if (i < 0) return '';
+    const last = i === SEG_FLOW.length - 1, nx = last ? SEG_FLOW[0] : SEG_FLOW[i + 1];
+    return `<button type="button" class="card next-stage no-print" data-action="trackTab" data-v="${nx[0]}" aria-label="${last ? 'Volver al' : 'Siguiente apartado:'} ${esc(nx[1])}">
+        <span class="ns-ic">${ic(nx[2], 22)}</span>
+        <span class="ns-text"><span class="ns-eyebrow">${last ? 'Volver al inicio del seguimiento' : `Siguiente apartado · ${i + 2} de ${SEG_FLOW.length}`}</span><b>${esc(nx[1])}</b><span class="small muted">${esc(nx[3])}</span></span>
+        <span class="ns-go">${ic(last ? 'chevL' : 'arrowR', 20)}</span>
+      </button>`;
+  }
   function viewSegSection() {
     const a = A(), tab = SEG_TABS.some(([k]) => k === a.ui.trackTab) ? a.ui.trackTab : 'panel';
     const label = SEG_TABS.find(([k]) => k === tab)[1];
@@ -1556,6 +1574,7 @@
           </div>
         </div>
         ${viewSeg()}
+        ${nextSegCard(tab)}
       </div>
     </div>`;
   }
