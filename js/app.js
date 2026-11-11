@@ -1504,6 +1504,24 @@
   const SEG_ICONS = { panel: 'chart', diario: 'edit', semanal: 'clip', guia: 'menu', config: 'target', acceso: 'user' };
   const PLAN_LABEL = Object.fromEntries(PLAN_NAV.flatMap(([, items]) => items.map(([k, l]) => [k, l])));
 
+  // Orden de los apartados de Plan: al final de cada uno, una tarjeta lleva al siguiente (y la última, a Seguimiento).
+  const PLAN_FLOW = [
+    ['req', 'Requerimientos', 'calc', 'Gasto energético, objetivo y macros de cada tipo de día.'],
+    ['planif', 'Planificación', 'target', 'Objetivo de la etapa, fechas, objetivos y mini cut.'],
+    ['menu', 'Menú diario', 'menu', 'Calendario de alimentación y comidas de cada tipo de día.'],
+    ['dist', 'Distribución de comidas', 'clock', 'Horarios e indicaciones de cada comida.'],
+    ['minuta', 'Descargar planificación', 'down', 'Vista previa y descarga del documento en PDF.'],
+  ];
+  function nextStepCard(tab) {
+    const i = PLAN_FLOW.findIndex(([k]) => k === tab); if (i < 0) return '';
+    const nx = PLAN_FLOW[i + 1] || [null, 'Seguimiento', 'chart', 'Panel, registro diario, seguimiento semanal y configuración de etapas.'];
+    const href = nx[0] ? `#/plan/${nx[0]}` : '#/seg';
+    return `<a class="card next-stage no-print" href="${href}" aria-label="Siguiente apartado: ${esc(nx[1])}">
+        <span class="ns-ic">${ic(nx[2], 22)}</span>
+        <span class="ns-text"><span class="ns-eyebrow">${nx[0] ? `Siguiente apartado · ${i + 2} de ${PLAN_FLOW.length}` : 'Siguiente etapa del proceso'}</span><b>${esc(nx[1])}</b><span class="small muted">${esc(nx[3])}</span></span>
+        <span class="ns-go">${ic('arrowR', 20)}</span>
+      </a>`;
+  }
   function viewPlan(tab) {
     const views = { req: viewReq, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
     if (tab === 'minicut') tab = 'planif'; // el Mini cut ahora vive dentro de «Planificación»
@@ -1519,6 +1537,7 @@
           </div>
         </div>
         ${views[tab]()}
+        ${isClientView() ? '' : nextStepCard(tab)}
       </div>
     </div>`;
   }
