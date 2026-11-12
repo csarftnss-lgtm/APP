@@ -256,6 +256,7 @@ td.sticky-col { background: var(--bg-2) !important; }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
 .pill.warn { background: var(--warn-soft); color: var(--warn); }
 .pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.slow { background: rgb(var(--info-rgb) / .13); color: var(--info); }
 .pill.gold { background: var(--accent-soft); color: var(--accent); }
 .dotc { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
@@ -512,7 +513,7 @@ tr.selected .eq-radio { border: 4.5px solid var(--accent); }
 /* Tracking */
 .status-hero { padding: 22px 24px; display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 20px; align-items: center; }
 .status-big { font-size: 30px; font-weight: 800; letter-spacing: -.02em; }
-.status-big.ok { color: var(--ok); } .status-big.warn { color: var(--warn); } .status-big.bad { color: var(--bad); } .status-big.none { color: var(--muted); }
+.status-big.ok { color: var(--ok); } .status-big.warn { color: var(--warn); } .status-big.bad { color: var(--bad); } .status-big.none { color: var(--muted); } .status-big.slow { color: var(--info); }
 .chart-box { position: relative; }
 .chart-box svg { display: block; width: 100%; height: auto; }
 .chart-tip { position: absolute; pointer-events: none; background: var(--surface-3); border: 1px solid var(--border-2); border-radius: 8px; padding: 6px 9px; font-size: 12px; white-space: nowrap; transform: translate(-50%, -110%); opacity: 0; transition: opacity .1s; z-index: 5; }
@@ -520,6 +521,7 @@ tr.selected .eq-radio { border: 4.5px solid var(--accent); }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
 .legend i.dot { width: 8px; height: 8px; border-radius: 50%; }
 .legend i.dash { background: repeating-linear-gradient(90deg, var(--muted) 0 4px, transparent 4px 7px) !important; }
+.legend i.band { height: 10px; background: rgb(var(--ok-rgb) / .22) !important; box-shadow: inset 0 1px 0 rgb(var(--ok-rgb) / .6), inset 0 -1px 0 rgb(var(--ok-rgb) / .6); }
 /* Login */
 .login-wrap { min-height: calc(100vh - 160px); display: grid; place-content: center; justify-items: center; gap: 16px; padding-block: 24px; }
 .login-card { width: min(420px, calc(100vw - 32px)); padding: 28px; display: grid; gap: 22px; }
@@ -938,7 +940,7 @@ p, .page-sub, .lc-desc, .hint { text-wrap: pretty; }
 .btn.primary:hover { filter: brightness(1.06); background: var(--primary-bg-hover); box-shadow: var(--primary-shadow-hover); }
 .t tbody tr:hover td { background: rgb(var(--tint) / calc(.028 * var(--tint-k))); }
 .pill { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 16%, transparent); }
-.pill.gold, .pill.ok, .pill.warn, .pill.bad { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 26%, transparent); }
+.pill.gold, .pill.ok, .pill.warn, .pill.bad, .pill.slow { box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 26%, transparent); }
 .sb-item.active { box-shadow: inset 0 0 0 1px rgb(var(--accent-rgb) / .18); }
 .seg button.active { color: var(--text); box-shadow: 0 1px 2px rgb(var(--shade) / calc(.4 * var(--shade-k))), inset 0 0 0 1px rgb(var(--tint) / .04); }
 .login-card { box-shadow: var(--shadow), 0 0 0 1px rgb(var(--accent-rgb) / .05), 0 30px 90px -30px rgb(var(--accent-rgb) / .22); }
@@ -1621,3 +1623,15 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .ex-title { font-weight: 600; color: var(--text); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ex-sub { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ex-foods { font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
+
+/* Rango de pérdida semanal de la etapa (Plan › Planificación) y su celda en el seguimiento semanal */
+.range-rows { display: grid; gap: 8px; }
+.range-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.range-row .select { width: auto; min-width: 230px; max-width: 100%; }
+.range-when { display: inline-flex; align-items: center; gap: 6px; min-width: 150px; font-size: 13px; color: var(--text-2); }
+.range-wk { width: 58px; text-align: center; padding-left: 6px; padding-right: 6px; }
+.range-pers { display: inline-flex; align-items: center; gap: 6px; }
+.range-pers .input-suffix { width: 104px; }
+.range-td { min-width: 120px; text-align: right; }
+.range-td .busc-tag { margin-top: 3px; }
+@media (max-width: 560px) { .range-row .select { min-width: 0; flex: 1 1 100%; } .range-when { min-width: 0; } }

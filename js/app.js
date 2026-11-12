@@ -163,11 +163,13 @@
   // (a.planif —objetivo, fechas y objetivos de la antigua sección «Etapa»— se conserva en los datos guardados, pero ya no se usa:
   //  sus objetivos pasaron a la etapa que le correspondía; ver migrateAthlete.)
   // Etapa del proceso (Plan › Planificación › Configuración del proceso). diasEntreno y diasPeso: 0 = lunes … 6 = domingo.
-  // objetivo: % semanal del peso (siempre positivo; el signo lo da el tipo de etapa).
+  // objetivo: % semanal del peso (siempre positivo; el signo lo da el tipo de etapa). Lo usan las etapas que no son de pérdida.
+  // Etapas de pérdida: rango de pérdida semanal — rango 'mod' (0,5–1 %), 'cons' (0,3–0,5 %) o 'pers' (rmin–rmax) —
+  // y tramos: cambios de rango dentro de la etapa [{ desde: n.º de semana de la etapa, rango, rmin, rmax }].
   const newStage = (tipo = '', o = {}) => Object.assign({ id: uid(), tipo, inicio: '', fin: '', pesoInicial: null, grasaInicial: null,
-    diasEntreno: [], pasos: null, objetivo: null, diasPeso: [], objetivos: [''], reqs: {}, chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
+    diasEntreno: [], pasos: null, objetivo: null, rango: '', rmin: null, rmax: null, tramos: [], diasPeso: [], objetivos: [''], reqs: {}, chart: { vars: ['peso', 'obj'], modo: 'semana' } }, o);
   const defaultStages = (inicio) => [
-    newStage('Pérdida de grasa', { inicio, fin: addDays(inicio, 7 * 12 - 1), objetivo: 1, pasos: 10000, diasPeso: [0, 2, 4] }),
+    newStage('Pérdida de grasa', { inicio, fin: addDays(inicio, 7 * 12 - 1), objetivo: 1, rango: 'mod', pasos: 10000, diasPeso: [0, 2, 4] }),
     newStage('Mini cut'), newStage('Mantenimiento'), newStage('Ganancia de masa muscular'),
   ];
   const newOption = () => ({ id: uid(), title: '', image: null, foods: [], notes: '' });
@@ -184,7 +186,7 @@
       id: uid(), createdAt: todayISO(), q: newQ(nombre),
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
-      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, signedObj: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
+      tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, signedObj: true, weeksByDate: true, rangos: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
       ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd' }, // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
@@ -269,11 +271,15 @@
     const base = newAthlete('').tracking;
     t = isPlain(t) ? t : {};
     const hadStages = isPlain(t.config) && Array.isArray(t.config.stages), signedOk = isPlain(t.config) && !!t.config.signedObj;
+    const byDate = isPlain(t.config) && !!t.config.weeksByDate, rangosOk = isPlain(t.config) && !!t.config.rangos;
     t.config = Object.assign(base.config, isPlain(t.config) ? t.config : {});
     if (!hadStages) { t.weeks = isPlain(t.weeks) ? t.weeks : {}; t.config.stages = stagesFromLegacy(t, null); keepLegacyTargets(t); }
     if (!signedOk) signStageObjs(t.config);
     t.weeks = isPlain(t.weeks) ? t.weeks : {}; t.daily = isPlain(t.daily) ? t.daily : {};
-    return moveWeeklyToDaily(t);
+    moveWeeklyToDaily(t);
+    if (!byDate) weeksToDates(t);
+    if (!rangosOk) setStageRanges(t.config); else ensureTramos(t.config);
+    return t;
   }
 
   function stable(v) {
@@ -827,11 +833,59 @@
   // Cálculos — seguimiento
   // =====================================================================
   const cfgOf = (a) => a.tracking.config;
-  const weekCount = (a) => clamp(Math.round(num(cfgOf(a).semanas) ?? 12), 1, 104);
-  const weekStart = (a, k) => addDays(cfgOf(a).inicio, 7 * k);
-  const weekDays = (a, k) => Array.from({ length: 7 }, (_, i) => addDays(weekStart(a, k), i));
-  const weekLabel = (k) => (k === 0 ? 'Semana inicial' : `Semana ${k}`);
-  const wk = (a, k) => a.tracking.weeks[k] || {};
+  // ---- Semanas del seguimiento ----
+  // Cada etapa con objetivo y fechas tiene sus propias semanas: la semana 1 empieza el día en que empieza la etapa
+  // (bloques de 7 días; la última puede ser más corta). Antes de la primera etapa va la «semana previa» (base para comparar
+  // la semana 1) y los días entre etapas forman bloques «sin etapa». Sin etapas con fechas se usa el calendario anterior
+  // (desde config.inicio, config.semanas semanas). k = posición de la semana en esta lista.
+  // Los datos de cada semana (fotos, macros, ajustes…) se guardan por la fecha en que empieza: tracking.weeks['aaaa-mm-dd'].
+  const TLC = new WeakMap();
+  function timeline(a) {
+    const c = cfgOf(a), st = stagesOf(a).filter(stageDated);
+    const sig = `${st.map((s) => `${s.id}|${s.tipo}|${s.inicio}|${s.fin}`).join('/')}#${c.inicio}#${c.semanas}`;
+    const hit = TLC.get(a); if (hit && hit.sig === sig) return hit.tl;
+    const tl = [], minD = (x, y) => (x < y ? x : y);
+    if (!st.length) {
+      const N = clamp(Math.round(num(c.semanas) ?? 12), 1, 104), ini = parseISO(c.inicio) ? c.inicio : mondayOf(todayISO());
+      for (let k = 0; k <= N; k++) { const s0 = addDays(ini, 7 * k); tl.push({ start: s0, end: addDays(s0, 6), s: null, j: null, legacy: true }); }
+    } else {
+      const sorted = st.slice().sort((x, y) => (x.inicio < y.inicio ? -1 : x.inicio > y.inicio ? 1 : x.fin < y.fin ? -1 : 1));
+      const first = sorted[0];
+      tl.push({ start: addDays(first.inicio, -7), end: addDays(first.inicio, -1), s: null, j: null, pre: true, forS: first });
+      let covered = addDays(first.inicio, -1);
+      sorted.forEach((s) => {
+        for (let g = addDays(covered, 1); g < s.inicio;) { const e = minD(addDays(g, 6), addDays(s.inicio, -1)); tl.push({ start: g, end: e, s: null, j: null, gap: true }); g = addDays(e, 1); }
+        const n = Math.ceil((daysBetween(s.inicio, s.fin) + 1) / 7);
+        for (let j = 0; j < n; j++) { const s0 = addDays(s.inicio, 7 * j); tl.push({ start: s0, end: minD(addDays(s0, 6), s.fin), s, j, n }); }
+        if (s.fin > covered) covered = s.fin;
+      });
+      tl.sort((x, y) => (x.start < y.start ? -1 : x.start > y.start ? 1 : 0));
+    }
+    tl.forEach((w, k) => { w.k = k; w.days = Array.from({ length: daysBetween(w.start, w.end) + 1 }, (_, i) => addDays(w.start, i)); });
+    TLC.set(a, { sig, tl });
+    return tl;
+  }
+  const wkOf = (a, k) => { const tl = timeline(a); return tl[clamp(Math.round(+k) || 0, 0, tl.length - 1)]; };
+  const weekCount = (a) => timeline(a).length - 1;
+  const weekStart = (a, k) => wkOf(a, k).start;
+  const weekDays = (a, k) => wkOf(a, k).days;
+  // Nombre de la semana: «Semana 3» (de su etapa), «Semana previa», «Sin etapa» o, sin etapas, «Semana inicial» / «Semana n».
+  function weekLabel(a, k) { const w = wkOf(a, k); return w.pre ? 'Semana previa' : w.s ? `Semana ${w.j + 1}` : w.legacy ? (w.k === 0 ? 'Semana inicial' : `Semana ${w.k}`) : 'Sin etapa'; }
+  // Con la etapa, para avisos: «E2 · Semana 3».
+  function weekName(a, k) { const w = wkOf(a, k); return w.s ? `E${stagesOf(a).indexOf(w.s) + 1} · Semana ${w.j + 1}` : `${weekLabel(a, k)} (${fmtDate(w.start, true)})`; }
+  // Posición corta dentro de la etapa: «3/10».
+  function weekPos(a, k) { const w = wkOf(a, k); return w.pre ? 'Previa' : w.s ? `${w.j + 1}/${w.n}` : w.legacy ? `${w.k}/${weekCount(a)}` : 'Sin etapa'; }
+  // «Semana 3/10», «Semana previa» o «Sin etapa».
+  function posTxt(a, k) { const w = wkOf(a, k); return w.s || w.legacy ? `Semana ${weekPos(a, k)}` : weekLabel(a, k); }
+  const isBase = (a, k) => { const w = wkOf(a, k); return !!(w.pre || (w.legacy && w.k === 0)); };
+  // Clave de los datos de la semana: la fecha en que empieza (o un dato guardado con otra fecha dentro de la semana).
+  function wkKey(a, k) {
+    const w = wkOf(a, k), ws = a.tracking.weeks || {};
+    if (isPlain(ws[w.start])) return w.start;
+    return Object.keys(ws).find((x) => x >= w.start && x <= w.end && isPlain(ws[x])) || w.start;
+  }
+  const wk = (a, k) => (a.tracking.weeks || {})[wkKey(a, k)] || {};
+  const wkP = (a, k) => `tracking.weeks.${wkKey(a, k)}`;
   const dailyOf = (a, d) => a.tracking.daily[d] || {};
   // ---- Etapas del proceso (Plan › Planificación › Configuración del proceso) ----
   // Las fechas de las etapas mandan: arman el calendario del registro diario y del seguimiento semanal,
@@ -843,13 +897,8 @@
   const dow = (d) => (parseISO(d).getDay() + 6) % 7; // 0 = lunes
   const DOW_L = ['L', 'M', 'X', 'J', 'V', 'S', 'D'], DOW_N = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   const stageOfDay = (a, d) => stagesOf(a).find((s) => stageDated(s) && d >= s.inicio && d <= s.fin) || null;
-  // Etapa de una semana del registro: la que cubre más días de esa semana (en empate, la primera de la lista).
-  function stageOfWeek(a, k) {
-    let best = null, bestN = 0;
-    const days = weekDays(a, k);
-    stagesOf(a).forEach((s) => { if (!stageDated(s)) return; const n = days.filter((d) => d >= s.inicio && d <= s.fin).length; if (n > bestN) { best = s; bestN = n; } });
-    return best;
-  }
+  // Etapa de una semana del seguimiento (null en la semana previa y en los días sin etapa).
+  function stageOfWeek(a, k) { return wkOf(a, k).s; }
   // Estado de una etapa según la fecha de hoy: 'now' en curso, 'next' aún no empieza, 'done' terminada, 'none' sin fechas u objetivo.
   const stageState = (s) => { if (!stageDated(s)) return 'none'; const t = todayISO(); return t < s.inicio ? 'next' : t > s.fin ? 'done' : 'now'; };
   // Etapa vigente: la que está en curso; si no hay, la próxima en empezar; si no, la última terminada. Sus requerimientos son las metas del plan.
@@ -874,6 +923,11 @@
   function stageTarget(s) { const v = num(s && s.objetivo); if (v == null) return null; const k = stageKind(s); return k === 'gain' ? Math.abs(v) : k === 'loss' ? -Math.abs(v) : v; }
   // Texto del objetivo semanal de una etapa: «1 % semanal de pérdida», «0,25 % semanal de aumento», «mantener el peso»…
   function stageObjTxt(s) {
+    if (stageKind(s) === 'loss') {
+      const r = rangeOf(s); if (!r) return '';
+      const ch = tramosOf(s).map((t) => { const x = rangeOf(t); return x ? `desde la semana ${num(t.desde)}, ${x.label.toLowerCase()}: ${rangeTxt(x)}` : ''; }).filter(Boolean);
+      return `${r.label}: ${rangeTxt(r)} semanal de pérdida${ch.length ? `; ${ch.join('; ')}` : ''}`;
+    }
     const v = num(s && s.objetivo); if (v == null) return '';
     const k = stageKind(s);
     if (k !== 'signed') return `${pctTxt(v)} % semanal de ${k === 'gain' ? 'aumento' : 'pérdida'}`;
@@ -895,15 +949,20 @@
   function weekEtapa(a, k) {
     const own = wk(a, k).etapa; if (own) return own;
     const s = stageOfWeek(a, k); if (s) return s.tipo;
+    if (wkOf(a, k).pre) return 'Previa a la etapa';
     return stagesOf(a).some(stageDated) ? 'Sin etapa' : (cfgOf(a).etapa || '');
   }
   // Semana marcada a mano con una etapa distinta de la que dicen las fechas de las etapas.
   function etapaMismatch(a, k) { const own = wk(a, k).etapa, s = stageOfWeek(a, k); return own && s && own !== s.tipo ? s : null; }
   function mismatchWeeks(a) { const out = []; for (let k = 0; k <= weekCount(a); k++) { const s = etapaMismatch(a, k); if (s) out.push({ k, own: wk(a, k).etapa, s }); } return out; }
-  // Semanas con un % buscado puesto a mano que no es el objetivo de su etapa.
+  // Semanas con un % buscado puesto a mano que no es la meta de su etapa (en las de pérdida, cualquier valor manual).
   function manualBuscadoWeeks(a) {
     const out = [];
-    for (let k = 1; k <= weekCount(a); k++) { const own = num(wk(a, k).buscado), tg = stageTarget(stageOfWeek(a, k)); if (own != null && tg != null && own !== tg) out.push({ k, own, tg }); }
+    for (let k = 1; k <= weekCount(a); k++) {
+      const own = num(wk(a, k).buscado), s = stageOfWeek(a, k); if (own == null || !s) continue;
+      if (stageKind(s) === 'loss') { const r = stageRange(s, wkOf(a, k).j); out.push({ k, own, tgTxt: r ? rangeTxt(r) : 'sin rango' }); continue; }
+      const tg = stageTarget(s); if (tg != null && own !== tg) out.push({ k, own, tgTxt: `${fmtS(tg)} %` });
+    }
     return out;
   }
   // Duración contando el primer y el último día: «12 semanas», «5 semanas y 3 días»…
@@ -920,7 +979,8 @@
     if (!st.length) return;
     const ini = st.map((s) => s.inicio).sort()[0], end = st.map((s) => s.fin).sort().pop();
     const N = clamp(Math.ceil((daysBetween(ini, end) + 1) / 7) - 1, 1, 104);
-    if (parseISO(c.inicio) && c.inicio !== ini) {
+    // Datos guardados por número de semana (antes de guardarlos por fecha): se mueven con sus fechas.
+    if (!c.weeksByDate && parseISO(c.inicio) && c.inicio !== ini) {
       const shift = Math.round(daysBetween(c.inicio, ini) / 7);
       if (shift) {
         const w = a.tracking.weeks || {}, out = {};
@@ -942,13 +1002,44 @@
   }
   // Conserva el % buscado que cada semana tenía (objetivo inicial y posterior): si el de la etapa no coincide,
   // queda como ajuste manual de esa semana.
+  // (Calendario anterior: semana k = 7 días desde config.inicio + 7k; su etapa es la que cubre más días.)
   function keepLegacyTargets(t) {
-    const c = t.config, a = { tracking: t }, N = weekCount(a);
+    const c = t.config, N = clamp(Math.round(num(c.semanas) ?? 12), 1, 104), st = (c.stages || []).filter(stageDated);
     for (let k = 1; k <= N; k++) {
       const w = t.weeks[k]; if (isPlain(w) && num(w.buscado) != null) continue;
       const old = k < (num(c.cambio) ?? 5) ? num(c.obj1) : num(c.obj2);
-      if (old != null && old !== stageTarget(stageOfWeek(a, k))) (t.weeks[k] = isPlain(w) ? w : {}).buscado = old;
+      const d0 = addDays(c.inicio, 7 * k), days = Array.from({ length: 7 }, (_, i) => addDays(d0, i));
+      let s = null, best = 0; st.forEach((x) => { const n = days.filter((d) => d >= x.inicio && d <= x.fin).length; if (n > best) { s = x; best = n; } });
+      if (old != null && old !== stageTarget(s)) (t.weeks[k] = isPlain(w) ? w : {}).buscado = old;
     }
+  }
+  // Antes, los datos de cada semana se guardaban por su número en el calendario (0, 1, 2… desde config.inicio).
+  // Ahora se guardan por la fecha en que empieza esa semana, para que sigan a sus fechas aunque cambien las etapas (una sola vez).
+  function weeksToDates(t) {
+    const c = t.config, ini = parseISO(c.inicio) ? c.inicio : null, out = {};
+    Object.keys(t.weeks || {}).forEach((k) => {
+      const v = t.weeks[k];
+      if (!ini || !/^-?\d+$/.test(k)) { out[k] = v; return; }
+      const key = addDays(ini, 7 * parseInt(k, 10));
+      out[key] = isPlain(out[key]) && isPlain(v) ? Object.assign({}, v, out[key]) : v;
+    });
+    t.weeks = out; c.weeksByDate = true;
+  }
+  const ensureTramos = (c) => (Array.isArray(c.stages) ? c.stages : []).forEach((s) => { if (!Array.isArray(s.tramos)) s.tramos = []; if (s.rango == null) s.rango = ''; });
+  // Etapas de pérdida: el % semanal pasa a ser un rango (una sola vez). 1 % → moderado (0,5–1 %); 0,5 % → conservador
+  // (0,3–0,5 %); otro valor → personalizado: ese valor ± la tolerancia de la configuración (el mismo criterio de «en ritmo»
+  // que tenía). El % anterior queda guardado en la etapa.
+  function setStageRanges(c) {
+    const tol = num(c.tol) ?? 0.25;
+    ensureTramos(c);
+    (c.stages || []).forEach((s) => {
+      if (stageKind(s) !== 'loss' || s.rango) return;
+      const v = num(s.objetivo); if (v == null) return;
+      const x = Math.abs(v);
+      if (x === 1) s.rango = 'mod'; else if (x === 0.5) s.rango = 'cons';
+      else { s.rango = 'pers'; s.rmin = +Math.max(0, x - tol).toFixed(2); s.rmax = +(x + tol).toFixed(2); }
+    });
+    c.rangos = true;
   }
   // Los objetivos ahora son de cada etapa. La primera vez, los de la antigua sección «Etapa» (a.planif) pasan a la etapa
   // que le correspondía: mismo objetivo y fechas; si no, mismo objetivo; si no, la primera con fechas; si no, la primera.
@@ -997,40 +1088,95 @@
       if (s.inicio <= p.fin) out.push(`${name(p)} y ${name(s)} se superponen del ${fmtDate(s.inicio)} al ${fmtDate(s.fin < p.fin ? s.fin : p.fin)}.`);
       else if (daysBetween(p.fin, s.inicio) > 1) { const n = daysBetween(p.fin, s.inicio) - 1; out.push(`Entre ${name(p)} y ${name(s)} quedan ${n} ${n === 1 ? 'día' : 'días'} sin etapa (${fmtDate(addDays(p.fin, 1))} – ${fmtDate(addDays(s.inicio, -1))}).`); }
     }
-    const c0 = cfgOf(a).inicio;
     dated.forEach((s) => {
-      if (s.inicio === c0 || !parseISO(c0)) return;
-      const off = daysBetween(c0, s.inicio);
-      if (off > 0 && off % 7) { const k = Math.floor(off / 7), ow = stageOfWeek(a, k); out.push(`${name(s)} empieza un ${DOW_N[dow(s.inicio)].toLowerCase()}, a mitad de la ${weekLabel(k).toLowerCase()} del registro (que parte el ${fmtDate(weekStart(a, k))}): esa semana queda como «${esc(ow ? ow.tipo : '—')}».`); }
+      if (stageKind(s) !== 'loss') return;
+      if (!rangeOf(s)) out.push(`${name(s)} no tiene rango de pérdida semanal: elige moderado, conservador o personalizado para evaluar sus semanas.`);
+      const n = Math.ceil((daysBetween(s.inicio, s.fin) + 1) / 7);
+      tramosOf(s).forEach((t) => {
+        if (num(t.desde) < 2 || num(t.desde) > n) out.push(`${name(s)}: el cambio de rango «desde la semana ${num(t.desde)}» está fuera de la etapa (debe ser entre la semana 2 y la ${n}).`);
+        else if (!rangeOf(t)) out.push(`${name(s)}: al cambio de rango desde la semana ${num(t.desde)} le falta el rango.`);
+      });
     });
     const cs = currentStage(a);
     if (cs) { const falt = (a.dayTypes || []).filter((dt) => !stageTargets(a, cs.s, dt).ok).map((dt) => `«${esc(dt.name)}»`);
       if (falt.length) out.push(`A la etapa vigente, ${name(cs.s)}, le faltan los requerimientos de ${falt.join(' y ')}: el menú diario, el documento y el seguimiento no tendrán esas metas.`); }
     const mb = manualBuscadoWeeks(a);
-    if (mb.length) out.push(`${mb.length === 1 ? 'Una semana tiene' : `${mb.length} semanas tienen`} un % buscado puesto a mano, distinto al objetivo de su etapa: ${mb.slice(0, 6).map((x) => `${weekLabel(x.k)} (${fmtS(x.own)} %; etapa ${fmtS(x.tg)} %)`).join(', ')}${mb.length > 6 ? '…' : ''}. En esas semanas manda el valor manual.`);
+    if (mb.length) out.push(`${mb.length === 1 ? 'Una semana tiene' : `${mb.length} semanas tienen`} un % buscado puesto a mano, distinto a la meta de su etapa: ${mb.slice(0, 6).map((x) => `${weekName(a, x.k)} (${fmtS(x.own)} %; etapa ${x.tgTxt})`).join(', ')}${mb.length > 6 ? '…' : ''}. En esas semanas manda el valor manual.`);
     const mm = mismatchWeeks(a);
-    if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de las etapas.`);
+    if (mm.length) out.push(`${mm.length === 1 ? 'Una semana está marcada' : `${mm.length} semanas están marcadas`} en el seguimiento con otra etapa que la de estas fechas: ${mm.slice(0, 6).map((x) => `${weekName(a, x.k)} («${esc(x.own)}»; según fechas «${esc(x.s.tipo)}»)`).join(', ')}${mm.length > 6 ? '…' : ''}. El % buscado sigue las fechas de las etapas.`);
     return out;
   }
   function weekWeights(a, k) { return weekDays(a, k).map((d) => num(dailyOf(a, d).peso)).filter((v) => v != null); }
-  function pesoInicial(a) { const s0 = stageOfWeek(a, 0); return num(s0 && s0.pesoInicial) ?? num(cfgOf(a).pesoInicial) ?? num(a.q.peso) ?? num(a.req.peso); }
-  function weekAvg(a, k) { const w = weekWeights(a, k); if (w.length) return mean(w); return k === 0 ? pesoInicial(a) : null; }
-  function buscado(a, k) {
-    if (k === 0) return null;
-    const own = num(wk(a, k).buscado); if (own != null) return own;
-    return stageTarget(stageOfWeek(a, k)); // el de la etapa que, según sus fechas, cubre la semana
+  // Pesos registrados entre dos fechas (incluidas).
+  function weightsIn(a, d0, d1) { const out = []; for (let d = d0; d <= d1; d = addDays(d, 1)) { const v = num(dailyOf(a, d).peso); if (v != null) out.push(v); } return out; }
+  function pesoInicial(a) { const w0 = timeline(a)[0], s0 = w0 && (w0.forS || w0.s); return num(s0 && s0.pesoInicial) ?? num(cfgOf(a).pesoInicial) ?? num(a.q.peso) ?? num(a.req.peso); }
+  function weekAvg(a, k) { const w = weekWeights(a, k); if (w.length) return mean(w); return isBase(a, k) ? pesoInicial(a) : null; }
+  // Pesajes mínimos para evaluar una semana (y cada bloque de la media de 7 días): 3, o los días de pesaje de la etapa si son menos.
+  const minWeighs = (s) => { const n = ((s && s.diasPeso) || []).length; return n ? Math.min(3, n) : 3; };
+  // Promedio con el que se compara una semana: el de los 7 días anteriores a su inicio (la semana anterior de la etapa o,
+  // en la semana 1, la semana previa a la etapa). Si ahí no hay pesajes, la semana 1 usa el peso inicial de la etapa.
+  function prevAvg(a, k) {
+    if (isBase(a, k)) return null;
+    const w = wkOf(a, k); if (w.legacy) return weekAvg(a, k - 1);
+    const v = weightsIn(a, addDays(w.start, -7), addDays(w.start, -1));
+    if (v.length) return mean(v);
+    return w.s && w.j === 0 ? num(w.s.pesoInicial) : null;
   }
+  // ---- Meta semanal ----
+  // Etapas de pérdida: rango de pérdida semanal (bajo el rango = lento, dentro = adecuado, sobre el rango = rápido).
+  // Demás etapas: % buscado con la tolerancia de la configuración.
+  const RANGOS = { mod: { label: 'Moderado', min: 0.5, max: 1 }, cons: { label: 'Conservador', min: 0.3, max: 0.5 } };
+  const RANGO_OPTS = [['', 'Elige un rango'], ['mod', 'Moderado · 0,5 – 1 %'], ['cons', 'Conservador · 0,3 – 0,5 %'], ['pers', 'Personalizado']];
+  // Rango de una definición { rango, rmin, rmax } → { key, label, min, max } (pérdida semanal en %, positiva), o null si está incompleta.
+  function rangeOf(r) {
+    if (!r) return null;
+    if (r.rango === 'pers') {
+      const mn = num(r.rmin), mx = num(r.rmax); if (mn == null || mx == null) return null;
+      const lo = Math.abs(mn), hi = Math.abs(mx); return hi >= lo ? { key: 'pers', label: 'Personalizado', min: lo, max: hi } : null;
+    }
+    const R = RANGOS[r.rango]; return R ? { key: r.rango, label: R.label, min: R.min, max: R.max } : null;
+  }
+  const tramosOf = (s) => (Array.isArray(s && s.tramos) ? s.tramos : []).filter((t) => num(t.desde) != null).slice().sort((x, y) => num(x.desde) - num(y.desde));
+  // Rango de la semana j (desde 0) de una etapa de pérdida: el de la etapa o el del último cambio de rango que ya empezó.
+  function stageRange(s, j = 0) {
+    if (!s || stageKind(s) !== 'loss') return null;
+    let src = s; tramosOf(s).forEach((t) => { if (j + 1 >= num(t.desde)) src = t; });
+    const r = rangeOf(src); return r && src !== s ? Object.assign(r, { desde: num(src.desde) }) : r;
+  }
+  const rangeTxt = (r) => (r ? `${pctTxt(r.min)} – ${pctTxt(r.max)} %` : '');
+  // Rango de una semana del seguimiento. Un % buscado puesto a mano antes en esa semana se respeta como rango alrededor
+  // de ese valor (± la tolerancia de la configuración).
+  function weekRange(a, k) {
+    const w = wkOf(a, k); if (!w.s || stageKind(w.s) !== 'loss') return null;
+    const own = num(wk(a, k).buscado);
+    if (own != null) { const v = Math.abs(own), tol = num(cfgOf(a).tol) ?? 0.25; return { key: 'manual', label: 'Ajuste manual', min: Math.max(0, +(v - tol).toFixed(2)), max: +(v + tol).toFixed(2), manual: true }; }
+    return stageRange(w.s, w.j);
+  }
+  // % buscado de las semanas que no son de pérdida (las de pérdida usan rango: weekRange).
+  function buscado(a, k) {
+    if (isBase(a, k)) return null;
+    const w = wkOf(a, k); if (w.s && stageKind(w.s) === 'loss') return null;
+    const own = num(wk(a, k).buscado); if (own != null) return own;
+    return stageTarget(w.s); // el de la etapa de la semana
+  }
+  // Meta de la semana como texto: «0,5 – 1 %» (rango de pérdida) o el % buscado con signo.
+  function metaTxt(a, k) { const r = weekRange(a, k); if (r) return rangeTxt(r); const b = buscado(a, k); return b != null ? fmtS(b) + '%' : '—'; }
+  // % de cambio de la semana: su promedio frente al de los 7 días anteriores.
   function logrado(a, k) {
-    if (k === 0) return null;
-    const cur = weekAvg(a, k); const prev = weekAvg(a, k - 1);
+    if (isBase(a, k)) return null;
+    const v = weekWeights(a, k), cur = v.length ? mean(v) : null, prev = prevAvg(a, k);
     return cur != null && prev ? ((cur - prev) / prev) * 100 : null;
   }
-  function status(a, k) {
-    const l = logrado(a, k), b = buscado(a, k), tol = num(cfgOf(a).tol) ?? 0.25;
-    if (k === 0) return { key: 'none', label: 'Semana base', msg: 'La semana inicial fija el punto de partida.' };
-    if (l == null) return { key: 'none', label: 'Faltan datos', msg: 'Se necesita el promedio de esta semana y de la anterior.' };
-    if (b == null) return { key: 'none', label: 'Sin meta', msg: 'Define el % buscado para esta semana.' };
-    const d = l - b;
+  // Estado de un cambio semanal l (%) frente a la meta: rango de pérdida r, o % buscado b con tolerancia.
+  function judge(a, l, r, b, s) {
+    if (r) {
+      const loss = Math.round(-l * 100) / 100, rt = rangeTxt(r);
+      if (loss < r.min) return { key: 'slow', label: 'Lento', msg: `Bajo el rango (${rt}): pierde menos de lo buscado. No es necesariamente malo; revísalo junto con la adherencia y los pasos.` };
+      if (loss > r.max) return { key: 'warn', label: 'Rápido', msg: `Sobre el rango (${rt}): pierde más rápido de lo buscado. En una etapa de definición eso arriesga masa muscular.` };
+      return { key: 'ok', label: 'Adecuado', msg: `Dentro del rango de la etapa (${rt}).` };
+    }
+    if (b == null) return { key: 'none', label: 'Sin meta', msg: s && stageKind(s) === 'loss' ? 'Elige el rango de pérdida de la etapa en Plan › Planificación.' : 'Define el objetivo semanal de la etapa.' };
+    const tol = num(cfgOf(a).tol) ?? 0.25, d = l - b;
     if (Math.abs(d) <= tol) return { key: 'ok', label: 'En ritmo', msg: 'Mantén el plan actual: el cambio está dentro de la tolerancia.' };
     if (b < 0) return l < b
       ? { key: 'warn', label: 'Muy rápido', msg: 'Baja más rápido que el objetivo: riesgo de perder masa muscular. Evalúa subir calorías.' }
@@ -1040,14 +1186,59 @@
       : { key: 'bad', label: 'Lento', msg: 'Ganancia por debajo de lo buscado. Revisa adherencia y evalúa subir calorías.' };
     return { key: 'warn', label: d > 0 ? 'Por encima' : 'Por debajo', msg: 'El peso se aleja del mantenimiento buscado.' };
   }
+  function status(a, k) {
+    const w = wkOf(a, k);
+    if (w.pre) return { key: 'none', label: 'Semana previa', msg: 'Sirve de base para comparar la semana 1 de la etapa.' };
+    if (isBase(a, k)) return { key: 'none', label: 'Semana base', msg: 'La semana inicial fija el punto de partida.' };
+    const n = weekWeights(a, k).length, m = minWeighs(w.s);
+    if (!n) return w.start > todayISO() ? { key: 'none', label: 'Pendiente', msg: 'Esta semana aún no empieza.' } : { key: 'none', label: 'Faltan datos', msg: 'Aún no hay pesajes en esta semana.' };
+    if (n < m) return { key: 'none', label: 'Faltan pesajes', msg: `Se necesitan al menos ${m} pesajes en la semana para evaluarla (hay ${n}).${w.s && !(w.s.diasPeso || []).length ? ' Si el atleta se pesa menos días, márcalos en «Días de reporte de peso» de la etapa.' : ''}` };
+    const l = logrado(a, k);
+    if (l == null) return { key: 'none', label: 'Faltan datos', msg: 'Faltan pesajes en los 7 días anteriores para comparar.' };
+    return judge(a, l, weekRange(a, k), buscado(a, k), w.s);
+  }
+  // Media de 7 días al último día con peso de la etapa (hasta hoy), frente a los 7 días anteriores. Cada bloque necesita
+  // el mínimo de pesajes. k: semana de la etapa que contiene ese día (de ahí sale la meta).
+  function rolling7(a, s) {
+    const lim = todayISO() < s.fin ? todayISO() : s.fin;
+    let d = lim; while (d >= s.inicio && num(dailyOf(a, d).peso) == null) d = addDays(d, -1);
+    if (d < s.inicio) return null;
+    const A = weightsIn(a, addDays(d, -6), d), B = weightsIn(a, addDays(d, -13), addDays(d, -7)), m = minWeighs(s);
+    const j = Math.floor(daysBetween(s.inicio, d) / 7), k = timeline(a).findIndex((w) => w.s === s && w.j === j);
+    const avg = mean(A), prev = B.length ? mean(B) : null, ok = A.length >= m && B.length >= m;
+    return { d, k, avg, prev, nA: A.length, nB: B.length, m, ok, pct: ok ? ((avg - prev) / prev) * 100 : null };
+  }
+  // Media móvil de 7 días en cada día con peso (si esos 7 días tienen el mínimo de pesajes).
+  function movingAvg(a, d0, d1, m = 3) {
+    const out = [];
+    for (let d = d0; d <= d1; d = addDays(d, 1)) { if (num(dailyOf(a, d).peso) == null) continue; const v = weightsIn(a, addDays(d, -6), d); if (v.length >= m) out.push({ d, v: mean(v), n: v.length }); }
+    return out;
+  }
+  // Peso esperado en la fecha d partiendo de p0 al inicio de la etapa, semana a semana con la meta de cada semana:
+  // { lo, hi } con rango de pérdida (pérdida máxima y mínima) o { v } con % buscado.
+  function expectedAt(a, s, p0, d) {
+    let lo = p0, hi = p0, v = p0; const loss = stageKind(s) === 'loss';
+    timeline(a).forEach((w, k) => {
+      if (w.s !== s || w.start > d) return;
+      const f = (daysBetween(w.start, d < w.end ? d : w.end) + 1) / 7;
+      if (loss) { const r = weekRange(a, k); if (r) { lo *= Math.pow(1 - r.max / 100, f); hi *= Math.pow(1 - r.min / 100, f); } }
+      else v *= Math.pow(1 + (buscado(a, k) || 0) / 100, f);
+    });
+    return loss ? { lo, hi } : { v };
+  }
   // Días de la semana con pasos registrados (para indicar si el promedio está incompleto).
   function weekStepsDays(a, k) { return weekDays(a, k).filter((d) => num(dailyOf(a, d).pasos) != null).length; }
-  const stepsIncomplete = (a, k) => { const n = weekStepsDays(a, k); return n > 0 && n < 7 ? 7 - n : 0; };
+  const stepsIncomplete = (a, k) => { const n = weekStepsDays(a, k), len = weekDays(a, k).length; return n > 0 && n < len ? len - n : 0; };
   function weekSteps(a, k) {
     const st = weekDays(a, k).map((d) => num(dailyOf(a, d).pasos)).filter((v) => v != null);
     return st.length ? mean(st) : num(wk(a, k).pasos);
   }
-  function currentWeek(a) { const d = daysBetween(cfgOf(a).inicio, todayISO()); return clamp(Math.floor(d / 7), 0, weekCount(a)); }
+  // Semana de hoy (si hoy no cae en ninguna: la primera, o la última que ya empezó).
+  function currentWeek(a) {
+    const tl = timeline(a), t = todayISO(), i = tl.findIndex((w) => t >= w.start && t <= w.end);
+    if (i >= 0) return i;
+    let last = 0; tl.forEach((w, k) => { if (w.start <= t) last = k; }); return last;
+  }
   function lastWeight(a) {
     const days = Object.keys(a.tracking.daily).filter((d) => num(a.tracking.daily[d].peso) != null).sort();
     return days.length ? { d: days[days.length - 1], v: num(a.tracking.daily[days[days.length - 1]].peso) } : null;
@@ -1101,7 +1292,7 @@
       const w = t.weeks[k]; if (!isPlain(w)) return;
       const keys = Object.keys(w).filter((f) => DAILY_MOVED.has(f) || /^h\d+$/.test(f) || f === 'com');
       if (!keys.length) return;
-      const day = addDays(t.config.inicio, 7 * (parseInt(k, 10) || 0));
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(k) ? k : addDays(t.config.inicio, 7 * (parseInt(k, 10) || 0));
       const dd = isPlain(t.daily[day]) ? t.daily[day] : (t.daily[day] = {});
       keys.forEach((f) => {
         const v = w[f]; delete w[f];
@@ -1112,7 +1303,9 @@
     });
     return t;
   }
-  const pillCls = { ok: 'ok', warn: 'warn', bad: 'bad', none: '' };
+  const pillCls = { ok: 'ok', warn: 'warn', bad: 'bad', slow: 'slow', none: '' };
+  // Color del punto de estado en los paneles laterales.
+  const stDot = (k) => `var(--${k === 'ok' ? 'ok' : k === 'warn' ? 'warn' : k === 'slow' ? 'info' : 'bad'})`;
 
   // =====================================================================
   // Router y render
@@ -1438,7 +1631,7 @@
       const cw = currentWeek(a), lw = lastWeight(a);
       let st = null; for (let k = Math.min(cw, weekCount(a)); k >= 1; k--) { const s = status(a, k); if (s.key !== 'none') { st = s; break; } }
       sStatus = `<div class="lc-rows">
-        <div class="lc-row"><span>Semana</span><b>${cw} / ${weekCount(a)}</b></div>
+        <div class="lc-row"><span>Semana</span><b>${esc(weekPos(a, cw))}</b></div>
         <div class="lc-row"><span>Último peso</span><b>${lw ? `${fmt(lw.v, 1)} kg <span class="small muted">${fmtDate(lw.d, true)}</span>` : '—'}</b></div>
         <div class="lc-row"><span>Estado</span>${st ? `<span class="pill ${pillCls[st.key]}">${st.label}</span>` : '<span class="pill">Sin datos</span>'}</div>
         <div class="lc-row"><span>Portal del cliente</span>${linkedUid(a) ? '<span class="pill ok">Conectado</span>' : a.portal.token ? '<span class="pill warn">Enlace enviado</span>' : '<span class="pill">Sin acceso</span>'}</div>
@@ -1698,11 +1891,11 @@
     let st = null;
     for (let k = Math.min(cw, weekCount(a)); k >= 1; k--) { const s = status(a, k); if (s.key !== 'none') { st = s; break; } }
     const initials = (a.q.nombre || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
-    const dot = (k) => (k === 'panel' && st ? `<span class="sb-dot" style="background:var(--${st.key === 'ok' ? 'ok' : st.key === 'warn' ? 'warn' : 'bad'})" title="Último estado: ${st.label}"></span>` : '');
+    const dot = (k) => (k === 'panel' && st ? `<span class="sb-dot" style="background:${stDot(st.key)}" title="Último estado: ${st.label}"></span>` : '');
     return `<aside class="sidebar" id="plan-sidebar" aria-label="Secciones de seguimiento">
       <div class="sb-head">
         <div class="sb-athlete" title="${esc(a.q.nombre || '')}"><span class="avatar sm">${esc(initials)}</span>
-          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Sin nombre')}</b><span>${esc(weekEtapa(a, cw))} · Semana ${cw}/${weekCount(a)}</span></div></div>
+          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Sin nombre')}</b><span>${esc(weekEtapa(a, cw))} · ${esc(posTxt(a, cw))}</span></div></div>
         <button class="btn xs ghost icon sb-close" data-action="closeDrawer" aria-label="Cerrar panel">${ic('x', 15)}</button>
       </div>
       <nav class="sb-nav"><div class="sb-group"><div class="sb-label">Seguimiento</div>
@@ -1730,13 +1923,13 @@
     };
     const badge = (k) => {
       if (k === 'alimentos') return `<span class="sb-badge">${S.foods.length}</span>`;
-      if (k === 'seg' && st) return `<span class="sb-dot" style="background:var(--${st.key === 'ok' ? 'ok' : st.key === 'warn' ? 'warn' : 'bad'})" title="Último estado: ${st.label}"></span>`;
+      if (k === 'seg' && st) return `<span class="sb-dot" style="background:${stDot(st.key)}" title="Último estado: ${st.label}"></span>`;
       return '';
     };
     return `<aside class="sidebar" id="plan-sidebar" aria-label="Secciones del plan">
       <div class="sb-head">
         <div class="sb-athlete" title="${esc(a.q.nombre || '')}"><span class="avatar sm">${esc(initials)}</span>
-          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Sin nombre')}</b><span>${esc(weekEtapa(a, cw))} · Semana ${cw}/${weekCount(a)}</span></div></div>
+          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Sin nombre')}</b><span>${esc(weekEtapa(a, cw))} · ${esc(posTxt(a, cw))}</span></div></div>
         <button class="btn xs ghost icon sb-close" data-action="closeDrawer" aria-label="Cerrar panel">${ic('x', 15)}</button>
       </div>
       <nav class="sb-nav">${PLAN_NAV.map(([g, items]) => `<div class="sb-group"><div class="sb-label">${g}</div>
@@ -2178,11 +2371,10 @@
     return (v[tab] || segPanel)(a);
   }
 
-  // Semanas del registro que pertenecen a una etapa (las que tienen más días dentro de sus fechas; si es muy corta, las que toca).
+  // Semanas de una etapa (las suyas, desde su fecha inicial). La primera etapa lleva antes su semana previa.
   function stageWeeks(a, s) {
-    const N = weekCount(a), out = [];
-    for (let k = 0; k <= N; k++) if (stageOfWeek(a, k) === s) out.push(k);
-    if (!out.length) for (let k = 0; k <= N; k++) if (weekDays(a, k).some((d) => d >= s.inicio && d <= s.fin)) out.push(k);
+    const tl = timeline(a), out = [];
+    tl.forEach((w, k) => { if (w.s === s || (w.pre && w.forS === s)) out.push(k); });
     return out;
   }
   // Promedio de un dato diario dentro de las fechas de la etapa y cuántos días lo tienen.
@@ -2194,8 +2386,8 @@
   // Devuelve las etapas con fechas, la elegida (por defecto la vigente) y sus semanas. Con withNone, también las semanas
   // del registro que no pertenecen a ninguna etapa, para que sus datos no queden ocultos.
   function trackScope(a, withNone) {
-    const dated = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s)), N = weekCount(a);
-    const all = Array.from({ length: N + 1 }, (_, k) => k), orphan = dated.length ? all.filter((k) => !stageOfWeek(a, k)) : [];
+    const dated = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageDated(x.s)), N = weekCount(a), tl = timeline(a);
+    const all = Array.from({ length: N + 1 }, (_, k) => k), orphan = dated.length ? all.filter((k) => tl[k].gap) : [];
     if (!dated.length) return { dated, orphan, sel: null, none: false, ks: all };
     if (withNone && a.ui.panelStage === '__none' && orphan.length) return { dated, orphan, sel: null, none: true, ks: orphan };
     const sel = dated.find((x) => x.s.id === a.ui.panelStage) || currentStage(a) || dated[0];
@@ -2208,9 +2400,8 @@
       <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar" style="width:auto;min-width:260px;max-width:100%">${sc.dated.map((x) => `<option value="${x.s.id}" ${sc.sel && x.s === sc.sel.s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${STAGE_ST[stageState(x.s)]})</option>`).join('')}
         ${withNone && sc.orphan.length ? `<option value="__none" ${sc.none ? 'selected' : ''}>Sin etapa · ${sc.orphan.length} ${sc.orphan.length === 1 ? 'semana' : 'semanas'}</option>` : ''}</select></div>`;
   }
-  // Nombre de una semana dentro de la etapa consultada: «Semana 3» y, en chico, su número en el registro.
-  const scopeWeek = (sc, k, j) => (sc.sel ? `Semana ${j + 1}` : weekLabel(k));
-  const scopeWeekSub = (sc, k) => (sc.sel ? `${weekLabel(k).toLowerCase()} del registro` : '');
+  // Rango de fechas de una semana: «28/09 – 04/10».
+  const weekRangeTxt = (a, k, y) => { const w = wkOf(a, k); return `${fmtDate(w.start, y)} – ${fmtDate(w.end, y)}`; };
   const noStagesNote = (a, sc) => (sc.dated.length || isClientView() ? '' : `<div class="callout small" style="margin-bottom:12px">Aún no hay etapas con objetivo y fechas: se muestran todas las semanas. Defínelas en <a href="#/plan/planif">Plan › Planificación</a> para consultar el seguimiento por etapa.</div>`);
   // Panel del seguimiento: se consulta por etapa (las de Plan › Planificación, con sus fechas).
   function segPanel(a) {
@@ -2218,54 +2409,68 @@
     if (!dated.length) return `<div class="card empty"><div class="e-ic">${ic('target', 30)}</div><h2>Aún no hay etapas con objetivo y fechas</h2>
       <p>El panel se consulta por etapa. ${isClientView() ? 'Tu coach definirá las etapas del proceso.' : 'Define el objetivo y las fechas de una etapa en <a href="#/plan/planif">Plan › Planificación</a>.'}</p></div>`;
     const sc = trackScope(a, false), sel = sc.sel;
-    const s = sel.s, ks = sc.ks, cw = currentWeek(a), stt = stageState(s), tg = stageTarget(s);
-    // Semana de referencia: la más reciente de la etapa que ya tiene pesajes (si no, la actual o la primera).
-    const past = ks.filter((k) => k <= cw), withW = past.filter((k) => weekWeights(a, k).length);
-    const kRef = withW.length ? withW[withW.length - 1] : past.length ? past[past.length - 1] : ks[0];
-    const st = stt === 'next' ? { key: 'none', label: 'Aún no empieza', msg: `Esta etapa empieza el ${fmtDate(s.inicio)}.` } : status(a, kRef);
-    const l = stt === 'next' ? null : logrado(a, kRef), b = buscado(a, kRef);
-    // Peso de partida de la etapa y último promedio semanal.
-    const own = num(s.pesoInicial), k0 = ks[0], avg0 = weekWeights(a, k0).length ? weekAvg(a, k0) : null;
-    const p0 = own ?? avg0 ?? (k0 === 0 ? pesoInicial(a) : (k0 > 0 ? weekAvg(a, k0 - 1) : null));
-    const p0src = own != null ? 'peso inicial de la etapa' : avg0 != null ? `promedio de su primera semana` : 'peso anterior a la etapa';
-    const kLast = withW.length ? withW[withW.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
-    const elapsed = kLast != null ? kLast - k0 + (own != null ? 0.5 : 0) : 0;
-    const exp = p0 != null && tg != null && kLast != null ? p0 * Math.pow(1 + tg / 100, elapsed) : null;
+    const s = sel.s, ks = sc.ks, sk = ks.filter((k) => wkOf(a, k).s === s), cw = currentWeek(a), stt = stageState(s), loss = stageKind(s) === 'loss';
+    // Lo que manda: la media de 7 días al último pesaje de la etapa frente a los 7 días anteriores.
+    const ro = stt === 'next' ? null : rolling7(a, s);
+    const kRef = ro && ro.k >= 0 ? ro.k : sk.includes(cw) ? cw : stt === 'done' ? sk[sk.length - 1] : sk[0], wRef = wkOf(a, kRef);
+    const r = loss ? weekRange(a, kRef) : null, b = loss ? null : buscado(a, kRef);
+    const st = stt === 'next' ? { key: 'none', label: 'Aún no empieza', msg: `Esta etapa empieza el ${fmtDate(s.inicio)}. Registra igual la semana previa: es la base para comparar la semana 1.` }
+      : !ro ? { key: 'none', label: 'Sin pesajes', msg: 'Aún no hay pesajes en esta etapa.' }
+      : !ro.ok ? { key: 'none', label: 'Faltan pesajes', msg: `La media de 7 días necesita al menos ${ro.m} pesajes en los últimos 7 días y en los 7 anteriores (hay ${ro.nA} y ${ro.nB}).` }
+      : judge(a, ro.pct, r, b, s);
+    const l = ro && ro.ok ? ro.pct : null;
+    // Peso de partida: el inicial de la etapa o, si no está, el promedio de los 7 días previos (o el de su primera semana).
+    const own = num(s.pesoInicial), pre = weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1)), w1 = sk.length ? weekWeights(a, sk[0]) : [];
+    const p0 = own ?? (pre.length ? mean(pre) : w1.length ? mean(w1) : null);
+    const p0src = own != null ? 'peso inicial de la etapa' : pre.length ? 'promedio de los 7 días previos' : 'promedio de su primera semana';
+    const pL = ro ? ro.avg : null, ex = p0 != null && ro ? expectedAt(a, s, p0, ro.d) : null;
+    const exTxt = !ex ? '' : ex.v != null ? `Esperado a la fecha: ${fmtS(ex.v - p0, 1)} kg.` : ex.lo !== p0 ? `Esperado a la fecha según el rango: entre ${fmtS(ex.hi - p0, 1)} y ${fmtS(ex.lo - p0, 1)} kg.` : '';
     const kpi = (lab, val, note) => `<div class="card kpi"><div class="k-label">${lab}</div><div class="k-value">${val}</div><div class="k-note">${note}</div></div>`;
-    const scTxt = (r) => (r.avg != null ? `<span class="sc-val" style="--sc:${scaleColor(r.avg, 0, 5)}">${fmt(r.avg, 1)}</span>` : '—');
+    const scTxt = (x) => (x.avg != null ? `<span class="sc-val" style="--sc:${scaleColor(x.avg, 0, 5)}">${fmt(x.avg, 1)}</span>` : '—');
     const adh = stageDaily(a, s, (d) => num(d.adh)), sue = stageDaily(a, s, (d) => num(d.sueno)), ene = stageDaily(a, s, (d) => num(d.energia)), sac = stageDaily(a, s, (d) => num(d.saciedad));
     const pasos = stageDaily(a, s, (d) => num(d.pasos)), pesajes = stageDaily(a, s, (d) => num(d.peso)), meta = num(s.pasos) ?? num(cfgOf(a).metaPasos);
-    const nDias = (r) => (r.n ? `${r.n} ${r.n === 1 ? 'día anotado' : 'días anotados'} en la etapa. ` : '');
-    const np = (s.diasPeso || []).length, planned = np * past.length;
-    const pos = ks.indexOf(cw);
+    const nDias = (x) => (x.n ? `${x.n} ${x.n === 1 ? 'día anotado' : 'días anotados'} en la etapa. ` : '');
+    const np = (s.diasPeso || []).length, past = sk.filter((k) => k <= cw), planned = np * past.length;
+    const wNow = wkOf(a, cw);
     const metric = a.ui.chartMetric || 'abd';
     const metrics = [['abd', 'Suma abdominal (cm)', (x) => sumAbd(x)], ['pl', 'Σ 4 pliegues (mm)', (x) => sumPl(x)], ['pecho', 'Pecho (cm)', (x) => num(x.pecho)], ['brazo', 'Brazos (cm)', (x) => num(x.brazo)], ['cadera', 'Cadera (cm)', (x) => num(x.cadera)], ['muslo', 'Muslos (cm)', (x) => num(x.muslo)]];
     const mdef = metrics.find((x) => x[0] === metric) || metrics[0];
-    const mPts = ks.map((k) => ({ x: parseISO(weekStart(a, k)).getTime(), y: mdef[2](weekMeasures(a, k)), label: weekLabel(k) })).filter((pt) => pt.y != null);
-    const rows = ks.map((k, j) => {
-      const avg = weekWeights(a, k).length ? weekAvg(a, k) : null, wl = logrado(a, k), wb = buscado(a, k), ws = status(a, k), stp = weekSteps(a, k), wa = weekField(a, k, 'adh');
-      return `<tr class="${k === cw ? 'today' : ''}"><td class="lbl nowrap">Semana ${j + 1}<span class="muted small"> · ${weekLabel(k).toLowerCase()} del registro</span>${k === cw ? ' <span class="pill gold">Actual</span>' : ''}</td>
-        <td class="nowrap">${fmtDate(weekStart(a, k), true)} – ${fmtDate(addDays(weekStart(a, k), 6), true)}</td>
-        <td class="num"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td><td class="num">${wb != null ? fmtS(wb) + '%' : '—'}</td>
-        <td class="num nowrap">${wl != null && avg != null ? `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.label)}">${fmtS(wl)}%</span>` : '—'}</td>
-        <td class="num">${weekWeights(a, k).length}${np ? `<span class="muted"> / ${np}</span>` : ''}</td>
+    const mPts = sk.map((k) => ({ x: parseISO(weekStart(a, k)).getTime(), y: mdef[2](weekMeasures(a, k)), label: weekLabel(a, k) })).filter((pt) => pt.y != null);
+    const rows = ks.map((k) => {
+      const w = wkOf(a, k), n = weekWeights(a, k).length, avg = n ? weekAvg(a, k) : null, wl = logrado(a, k), ws = status(a, k), stp = weekSteps(a, k), wa = weekField(a, k, 'adh');
+      return `<tr class="${k === cw ? 'today' : ''}"><td class="lbl nowrap">${weekLabel(a, k)}${k === cw ? ' <span class="pill gold">Actual</span>' : ''}</td>
+        <td class="nowrap">${weekRangeTxt(a, k, true)}</td>
+        <td class="num"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td><td class="num nowrap">${w.pre ? '' : metaTxt(a, k)}</td>
+        <td class="num nowrap">${wl != null ? `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.msg)}">${fmtS(wl)}%</span>` : '—'}</td>
+        <td class="nowrap">${w.pre ? '<span class="muted small">Base de la semana 1</span>' : `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.msg)}">${esc(ws.label)}</span>`}</td>
+        <td class="num">${n}${np && !w.pre ? `<span class="muted"> / ${np}</span>` : ''}</td>
         <td class="num">${stp != null ? fmt(stp) : '—'}</td><td class="num">${wa.avg != null ? fmt(wa.avg, 1) : '—'}</td></tr>`;
     }).join('');
+    let diffCell;
+    if (loss) {
+      const x = l != null ? Math.round(-l * 100) / 100 : null, has = x != null && r;
+      const v = !has ? '—' : x < r.min ? `${fmt(r.min - x, 2)} pp` : x > r.max ? `${fmt(x - r.max, 2)} pp` : 'Dentro';
+      const sub = !has ? 'Pérdida semanal frente al rango' : x < r.min ? 'bajo el mínimo del rango' : x > r.max ? 'sobre el máximo del rango' : `pierde ${pctTxt(x)} % por semana`;
+      diffCell = `<div><div class="label">Frente al rango</div><div class="big-num" style="font-size:28px">${v}</div><div class="small muted">${sub}</div></div>`;
+    } else diffCell = `<div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp</div></div>`;
+    const metaCell = loss
+      ? `<div><div class="label">Rango de la semana · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${r ? rangeTxt(r) : '—'}</div><div class="small muted">${r ? `${esc(r.label)}${r.desde ? ` · desde la semana ${r.desde}` : ''}` : 'Elige el rango en Plan › Planificación'}</div></div>`
+      : `<div><div class="label">Objetivo semanal · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${b != null ? fmtS(b) + '%' : '—'}</div><div class="small muted">${esc(s.tipo)}</div></div>`;
     return `
     <div class="row" style="justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap">
       <div class="muted">Selecciona una etapa para consultar su progreso, compararlo con su objetivo y revisar su evolución.</div>
       ${stageSelect(a, sc, false)}
     </div>
     <section class="card status-hero">
-      <div><div class="k-label label">CÓMO VA LA ETAPA · SEMANA ${ks.indexOf(kRef) + 1} DE ${ks.length}</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
-      <div><div class="label">Cambio semanal logrado</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}</div><div class="small muted">${fmtDate(weekStart(a, kRef), true)} – ${fmtDate(addDays(weekStart(a, kRef), 6), true)}</div></div>
-      <div><div class="label">Objetivo semanal · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${b != null ? fmtS(b) + '%' : '—'}</div><div class="small muted">${esc(s.tipo)}</div></div>
-      <div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp</div></div>
+      <div><div class="k-label label">CÓMO VA LA ETAPA${wRef.s === s ? ` · SEMANA ${wRef.j + 1} DE ${wRef.n}` : ''}</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
+      <div><div class="label">Cambio semanal · media 7 días</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}</div><div class="small muted">${ro ? `7 días al ${fmtDate(ro.d, true)} frente a los 7 anteriores` : 'Sin pesajes en la etapa'}</div></div>
+      ${metaCell}
+      ${diffCell}
     </section>
     <div class="grid g4 mt16">
-      ${kpi(`Etapa · E${sel.i + 1}`, stt === 'now' && pos >= 0 ? `Semana ${pos + 1}<small>/ ${ks.length}</small>` : stt === 'next' ? 'Próxima' : stt === 'done' ? 'Terminada' : 'En curso', `${esc(s.tipo)} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}.`)}
-      ${kpi('Peso actual', pL != null ? `${fmt(pL, 2)}<small>kg</small>` : '—', pL != null ? `Promedio de la semana ${ks.indexOf(kLast) + 1} de la etapa, la última con pesajes.` : 'Aún no hay pesajes en esta etapa.')}
-      ${kpi('Cambio en la etapa', pL != null && p0 != null ? `${fmtS(pL - p0, 1)}<small>kg</small>` : '—', `${p0 != null ? `Desde ${fmt(p0, 1)} kg (${p0src})${pL != null ? `: ${fmtS(((pL - p0) / p0) * 100, 1)} %` : ''}. ` : ''}${exp != null ? `Esperado a la fecha: ${fmtS(exp - p0, 1)} kg.` : ''}`)}
+      ${kpi(`Etapa · E${sel.i + 1}`, stt === 'now' && wNow.s === s ? `Semana ${wNow.j + 1}<small>/ ${wNow.n}</small>` : stt === 'next' ? 'Próxima' : stt === 'done' ? 'Terminada' : 'En curso', `${esc(s.tipo)} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}.`)}
+      ${kpi('Peso actual · media 7 días', pL != null ? `${fmt(pL, 2)}<small>kg</small>` : '—', ro ? `Promedio de los 7 días al ${fmtDate(ro.d)} (${ro.nA} ${ro.nA === 1 ? 'pesaje' : 'pesajes'}). La media, no el peso de un día.` : 'Aún no hay pesajes en esta etapa.')}
+      ${kpi('Cambio en la etapa', pL != null && p0 != null ? `${fmtS(pL - p0, 1)}<small>kg</small>` : '—', `${p0 != null ? `Desde ${fmt(p0, 1)} kg (${p0src})${pL != null ? `: ${fmtS(((pL - p0) / p0) * 100, 1)} %` : ''}. ` : ''}${exTxt}`)}
       ${kpi('Pesajes · etapa', `${pesajes.n}${planned ? `<small>/ ${planned}</small>` : ''}`, np ? `Meta de la etapa: ${np} por semana (${(s.diasPeso || []).slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ')}), en ${past.length} ${past.length === 1 ? 'semana transcurrida' : 'semanas transcurridas'}.` : 'Días con peso registrado dentro de la etapa.')}
       ${kpi('Pasos · promedio diario', pasos.avg != null ? fmt(pasos.avg) : '—', nDias(pasos) + (meta ? `Meta diaria: ${fmt(meta)} pasos.` : ''))}
       ${kpi('Adherencia · promedio', adh.avg != null ? `${scTxt(adh)}<small>/ 5</small>` : '—', nDias(adh) + 'Si baja de 4, el problema es la adherencia, no la dieta.')}
@@ -2273,14 +2478,15 @@
       ${kpi('Saciedad · promedio', sac.avg != null ? `${scTxt(sac)}<small>/ 5</small>` : '—', nDias(sac) + 'Saciedad percibida (escala 0 a 5).')}
     </div>
     <section class="card mt16">
-      <div class="card-head"><h3>Semanas de la etapa</h3><span class="sub">${ks.length} ${ks.length === 1 ? 'semana' : 'semanas'} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)}</span></div>
-      <div class="table-wrap" style="border:0;border-radius:0"><table class="t"><thead><tr><th>Semana</th><th>Fechas</th><th class="num">Peso prom. (kg)</th><th class="num">% buscado</th><th class="num">% logrado</th><th class="num">Pesajes</th><th class="num">Pasos prom.</th><th class="num">Adherencia</th></tr></thead>
+      <div class="card-head"><h3>Semanas de la etapa</h3><span class="sub">${sk.length} ${sk.length === 1 ? 'semana' : 'semanas'} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)}</span></div>
+      <div class="table-wrap" style="border:0;border-radius:0"><table class="t"><thead><tr><th>Semana</th><th>Fechas</th><th class="num">Peso prom. (kg)</th><th class="num">${loss ? 'Rango de pérdida' : '% buscado'}</th><th class="num">% logrado</th><th>Estado</th><th class="num">Pesajes</th><th class="num">Pasos prom.</th><th class="num">Adherencia</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
+      <div class="card-body hint" style="padding-top:10px">% logrado: promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos ${minWeighs(s)} pesajes.${loss ? ' Bajo el rango: lento · dentro: adecuado · sobre el rango: rápido.' : ''}</div>
     </section>
     <section class="card mt16">
       <div class="card-head"><h3>Evolución del peso · E${sel.i + 1}</h3><span class="spacer"></span>
-        <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Promedio semanal</span><span><i class="dash"></i>Trayectoria objetivo</span></div></div>
-      <div class="card-body">${weightChart(a, ks, own)}</div>
+        <div class="legend"><span><i class="dot" style="background:var(--chart-dots)"></i>Peso diario</span><span><i style="background:var(--accent)"></i>Media de 7 días</span>${loss ? '<span><i class="band"></i>Rango de pérdida</span>' : '<span><i class="dash"></i>Trayectoria objetivo</span>'}</div></div>
+      <div class="card-body">${weightChart(a, ks, p0, s)}</div>
     </section>
     <section class="card mt16">
       <div class="card-head"><h3>Composición corporal por semana · E${sel.i + 1}</h3><span class="spacer"></span>
@@ -2289,26 +2495,32 @@
     </section>`;
   }
 
-  // Peso diario, promedio semanal y trayectoria objetivo de las semanas indicadas (todas si no se indican).
-  // start: peso de partida de la trayectoria (si no, el promedio de la primera semana o el de la semana anterior).
-  function weightChart(a, ks, start) {
+  // Peso diario, media de 7 días y meta de las semanas indicadas: franja del rango de pérdida o trayectoria del % buscado,
+  // desde p0 (peso de partida de la etapa s, al día de su inicio).
+  function weightChart(a, ks, p0, s) {
     if (!ks) ks = Array.from({ length: weekCount(a) + 1 }, (_, k) => k);
-    const daily = [];
-    ks.forEach((k) => weekDays(a, k).forEach((d) => { const v = num(dailyOf(a, d).peso); if (v != null) daily.push({ x: parseISO(d).getTime(), y: v, label: `${fmtDate(d)} · ${fmt(v, 1)} kg` }); }));
-    const avgs = []; const target = [];
-    let tgt = start ?? weekAvg(a, ks[0]) ?? (ks[0] > 0 ? weekAvg(a, ks[0] - 1) : null);
-    ks.forEach((k, j) => {
-      const x = parseISO(addDays(weekStart(a, k), 3)).getTime();
-      const v = weekAvg(a, k); if (v != null) avgs.push({ x, y: v, label: `${weekLabel(k)} · ${fmt(v, 2)} kg` });
-      if (tgt != null) { if (j > 0) tgt = tgt * (1 + (buscado(a, k) || 0) / 100); target.push({ x, y: tgt, label: `Objetivo ${weekLabel(k)} · ${fmt(tgt, 2)} kg` }); }
-    });
+    const t = (d) => parseISO(d).getTime(), daily = [];
+    ks.forEach((k) => weekDays(a, k).forEach((d) => { const v = num(dailyOf(a, d).peso); if (v != null) daily.push({ x: t(d), y: v, label: `${fmtDate(d)} · ${fmt(v, 1)} kg` }); }));
     if (!daily.length) return '<div class="muted center" style="padding:40px">Aún no hay pesajes en estas fechas. Regístralos en “Registro diario de peso”.</div>';
-    return chartSVG([{ pts: target, color: 'var(--muted)', type: 'dash' }, { pts: daily, color: 'var(--chart-dots)', type: 'dots' }, { pts: avgs, color: 'var(--accent)', type: 'line' }], { fmtY: (v) => fmt(v, 1), height: 300 });
+    const mv = movingAvg(a, weekStart(a, ks[0]), wkOf(a, ks[ks.length - 1]).end, minWeighs(s)).map((p) => ({ x: t(p.d), y: p.v, label: `${fmtDate(p.d)} · media 7 días ${fmt(p.v, 2)} kg (${p.n} ${p.n === 1 ? 'pesaje' : 'pesajes'})` }));
+    const series = [];
+    if (s && p0 != null) {
+      const loss = stageKind(s) === 'loss', band = [{ x: t(s.inicio), y: p0, y2: p0, label: `Inicio · ${fmt(p0, 1)} kg` }], line = [{ x: t(s.inicio), y: p0, label: `Inicio · ${fmt(p0, 1)} kg` }];
+      let lo = p0, hi = p0, v = p0;
+      ks.filter((k) => wkOf(a, k).s === s).forEach((k) => {
+        const w = wkOf(a, k), f = w.days.length / 7, x = t(addDays(w.end, 1));
+        if (loss) { const r = weekRange(a, k); if (r) { lo *= Math.pow(1 - r.max / 100, f); hi *= Math.pow(1 - r.min / 100, f); } band.push({ x, y: lo, y2: hi, label: `Fin de la ${weekLabel(a, k).toLowerCase()} · rango ${fmt(lo, 1)} – ${fmt(hi, 1)} kg` }); }
+        else { v *= Math.pow(1 + (buscado(a, k) || 0) / 100, f); line.push({ x, y: v, label: `Objetivo al fin de la ${weekLabel(a, k).toLowerCase()} · ${fmt(v, 2)} kg` }); }
+      });
+      series.push(loss ? { pts: band, color: 'var(--ok)', type: 'band' } : { pts: line, color: 'var(--muted)', type: 'dash' });
+    }
+    series.push({ pts: daily, color: 'var(--chart-dots)', type: 'dots' }, { pts: mv, color: 'var(--accent)', type: 'mline' });
+    return chartSVG(series, { fmtY: (v) => fmt(v, 1), height: 300 });
   }
 
   function chartSVG(series, { height = 280, fmtY = (v) => v } = {}) {
     const W = 1000, H = height, L = 52, R = 18, Tp = 14, B = 30;
-    const all = series.flatMap((s) => s.pts);
+    const all = series.flatMap((s) => s.pts.flatMap((p) => (p.y2 != null ? [p, { x: p.x, y: p.y2 }] : [p])));
     if (!all.length) return '';
     let x0 = Math.min(...all.map((p) => p.x)), x1 = Math.max(...all.map((p) => p.x));
     if (x0 === x1) { x0 -= 86400000 * 3; x1 += 86400000 * 3; }
@@ -2323,7 +2535,13 @@
     const body = series.map((s) => {
       if (!s.pts.length) return '';
       const pts = [...s.pts].sort((p, q) => p.x - q.x);
-      const d = pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+      const path = (f) => pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.x).toFixed(1)},${sy(p[f]).toFixed(1)}`).join(' '), d = path('y');
+      const hit = (r) => pts.map((p) => `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y2 != null ? (p.y + p.y2) / 2 : p.y).toFixed(1)}" r="${r}" fill="transparent"><title>${esc(p.label || fmtY(p.y))}</title></circle>`).join('');
+      if (s.type === 'band') { // franja entre y (abajo) e y2 (arriba)
+        const back = [...pts].reverse().map((p) => `L${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(' ');
+        return `<path d="${path('y2')} ${back} Z" fill="${s.color}" fill-opacity=".13" stroke="none"/><path d="${d}" fill="none" stroke="${s.color}" stroke-opacity=".6" stroke-width="1.2" stroke-dasharray="4 4"/><path d="${path('y2')}" fill="none" stroke="${s.color}" stroke-opacity=".6" stroke-width="1.2" stroke-dasharray="4 4"/>${hit(8)}`;
+      }
+      if (s.type === 'mline') return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>${hit(6)}`;
       const dots = pts.map((p) => `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${s.type === 'dots' ? 3.2 : s.type === 'dash' ? 0 : 4}" fill="${s.type === 'line' ? 'var(--bg)' : s.color}" stroke="${s.color}" stroke-width="${s.type === 'line' ? 2 : 0}"><title>${esc(p.label || fmtY(p.y))}</title></circle>`).join('');
       if (s.type === 'dots') return dots;
       return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.type === 'dash' ? 1.5 : 2.5}" ${s.type === 'dash' ? 'stroke-dasharray="5 5"' : ''} stroke-linejoin="round" stroke-linecap="round"/>${dots}`;
@@ -2335,7 +2553,8 @@
   const DAILY_GROUPS = [['esc', 'Escalas'], ['ham', 'Hambre'], ['pl', 'Pliegues'], ['per', 'Perímetros']];
   const dailyShow = (() => { try { return Object.assign({ esc: true, ham: true, pl: true, per: true }, JSON.parse(lsGet('prepcoach-dailycols') || '{}')); } catch { return { esc: true, ham: true, pl: true, per: true }; } })();
   const wkFold = (() => { try { return JSON.parse(lsGet('prepcoach-wkfold') || '{}'); } catch { return {}; } })();
-  const isFolded = (a, k) => (wkFold[k] !== undefined ? wkFold[k] : k > currentWeek(a) + 1);
+  // Semanas plegadas en el registro diario (por la fecha en que empieza la semana).
+  const isFolded = (a, k) => { const f = wkFold[weekStart(a, k)]; return f !== undefined ? f : k > currentWeek(a) + 1; };
 
   // Escala como menú desplegable (conserva valores antiguos fuera de rango o con decimales).
   // Con `color` cada número lleva su color de la escala (rojo = peor, verde = mejor; `color.rev` lo invierte;
@@ -2357,9 +2576,10 @@
   // a mano (queda la alerta «No coincide» con opción de volver a las fechas de las etapas).
   function etapaCell(a, k, cls = 'cell', tag = false) {
     const own = wk(a, k).etapa || '', der = stageOfWeek(a, k), mm = etapaMismatch(a, k);
+    if (wkOf(a, k).pre) return '<span class="muted">Previa a la etapa</span>';
     if (isClientView()) return `${esc(weekEtapa(a, k))}${mm ? ' <span class="busc-tag manual" style="display:inline-block;margin:0 0 0 6px">No coincide</span>' : ''}`;
     const opts = [['', der ? der.tipo : 'Sin etapa'], ...(own && !ETAPAS.includes(own) ? [own] : []), ...ETAPAS.filter((x) => !(x === (der && der.tipo) && !own))];
-    return `${SEL(`tracking.weeks.${k}.etapa`, opts, { cls, attrs: `aria-label="Etapa de la ${weekLabel(k).toLowerCase()}"` })}${mm
+    return `${SEL(`${wkP(a, k)}.etapa`, opts, { cls, attrs: `aria-label="Etapa de la ${esc(weekLabel(a, k).toLowerCase())}"` })}${mm
       ? `<button type="button" class="busc-tag manual" data-action="resetEtapa" data-k="${k}" title="No coincide con las etapas de Plan › Planificación: según sus fechas esta semana es «${esc(mm.tipo)}». Toca para usar esa etapa.">No coincide ↺</button>`
       : tag && !own && der ? '<span class="busc-tag" title="Etapa según las fechas de Plan › Planificación">Etapa</span>' : ''}`;
   }
@@ -2367,7 +2587,7 @@
   function mismatchCallout(a) {
     const mm = mismatchWeeks(a); if (!mm.length) return '';
     return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Las etapas no coinciden con Plan › Planificación.</b>
-      ${mm.slice(0, 6).map((x) => `${weekLabel(x.k)} está marcada como «${esc(x.own)}», pero según las fechas corresponde a «${esc(x.s.tipo)}»`).join('; ')}${mm.length > 6 ? '…' : ''}.
+      ${mm.slice(0, 6).map((x) => `${weekName(a, x.k)} está marcada como «${esc(x.own)}», pero según las fechas corresponde a «${esc(x.s.tipo)}»`).join('; ')}${mm.length > 6 ? '…' : ''}.
       ${isClientView() ? '' : `<div class="mt8"><button class="btn sm" data-action="applyStageDates">Usar las fechas de las etapas</button></div>`}</div>`;
   }
 
@@ -2408,17 +2628,17 @@
     for (let j = 0; j < sc.ks.length; j++) {
       const k = sc.ks[j];
       const days = weekDays(a, k), avg = weekAvg(a, k), n = weekWeights(a, k).length, steps = weekSteps(a, k);
-      const l = k > 0 ? logrado(a, k) : null, folded = isFolded(a, k);
+      const l = logrado(a, k), folded = isFolded(a, k), wst = status(a, k);
       const trained = days.filter((d) => dailyOf(a, d).entreno === 'si').length, skw = stageOfWeek(a, k); // metas de pesajes y entrenos: las de la etapa
       rows += `<tr class="week-row" id="wk-${k}"><td colspan="${nCols}"><div class="wk-head">
         <div class="wk-title"><button type="button" class="wk-fold" data-action="foldWeek" data-k="${k}" aria-expanded="${!folded}" title="${folded ? 'Mostrar' : 'Ocultar'} los días de esta semana">${ic(folded ? 'chevR' : 'arrowDown', 14)}</button>
-          <b>${scopeWeek(sc, k, j)}</b><span>${fmtDate(days[0])} – ${fmtDate(days[6])}${scopeWeekSub(sc, k) ? ` · ${scopeWeekSub(sc, k)}` : ''}${k === 0 ? ' · peso de partida' : ''}</span><span class="wk-etapa">${etapaCell(a, k, 'cell wk-etapa-sel')}</span></div>
+          <b>${weekLabel(a, k)}</b><span>${fmtDate(days[0])} – ${fmtDate(days[days.length - 1])}${wkOf(a, k).pre ? ' · base para comparar la semana 1' : isBase(a, k) ? ' · peso de partida' : ''}</span><span class="wk-etapa">${etapaCell(a, k, 'cell wk-etapa-sel')}</span></div>
         <div class="wk-stats">
           <span class="wk-stat"><small>Promedio</small><b>${avg != null ? fmt(avg, 2) + ' kg' : '—'}</b></span>
           <span class="wk-stat"><small>Pesajes</small><b>${n}/${(skw && (skw.diasPeso || []).length) || 7}</b></span>
           <span class="wk-stat"><small>Entrenos</small><b>${trained}/${(skw && (skw.diasEntreno || []).length) || 7}</b></span>
           <span class="wk-stat"><small>Pasos prom.</small><b>${steps != null ? fmt(steps) : '—'}</b>${stepsIncomplete(a, k) ? `<span class="inc-pill" title="Promedio parcial: faltan ${stepsIncomplete(a, k)} días por ingresar">Incompleto · ${weekStepsDays(a, k)}/7</span>` : ''}</span>
-          ${k > 0 ? `<span class="wk-stat"><small>Cambio</small>${l != null ? `<span class="pill ${pillCls[status(a, k).key]}">${fmtS(l)}%</span>` : '<b>—</b>'}</span>` : ''}
+          ${!isBase(a, k) ? `<span class="wk-stat"><small>Cambio</small>${l != null ? `<span class="pill ${pillCls[wst.key]}" title="${esc(wst.label)} · ${esc(wst.msg)}">${fmtS(l)}%</span>` : '<b>—</b>'}</span>` : ''}
         </div></div></td></tr>`;
       if (folded) continue;
       rows += days.map((d) => {
@@ -2438,7 +2658,7 @@
     const grp = (on, span, label) => (on ? `<th colspan="${span}" class="g-start">${label}</th>` : '');
     return `${mismatchCallout(a)}${noStagesNote(a, sc)}
     <div class="row seg-scope" style="justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
-      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)}).` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
+      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.filter((k) => !wkOf(a, k).pre).length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)})${sc.ks.some((k) => wkOf(a, k).pre) ? ', con su semana previa' : ''}.` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
       ${stageSelect(a, sc, true)}
     </div>
     <div class="row" style="justify-content:space-between;margin-bottom:12px">
@@ -2468,7 +2688,7 @@
 
   function segWeekly(a) {
     const N = weekCount(a), cfg = cfgOf(a), cw = currentWeek(a), meals = mealCols(a);
-    const c = (k, f, ph = '') => `<td class="pad0">${I(`tracking.weeks.${k}.${f}`, { cls: 'cell', num: true, live: true, ph })}</td>`;
+    const c = (k, f, ph = '') => `<td class="pad0">${I(`${wkP(a, k)}.${f}`, { cls: 'cell', num: true, live: true, ph })}</td>`;
     // Promedio semanal de un campo diario, con aviso si faltan días.
     const avgCell = (k, f, first) => {
       const r = weekField(a, k, f), m = scaleMeta(f), c = m && r.avg != null ? metaColor(m, r.avg) : null;
@@ -2481,7 +2701,7 @@
     let snap = false;
     const macCell = (k, f, live) => {
       const stored = wk(a, k)[f] || '', usePlan = k >= cw || !stored, v = usePlan ? live : stored;
-      if (k === cw && !ro && live && stored !== live) { setP(`tracking.weeks.${k}.${f}`, live); snap = true; }
+      if (k === cw && !ro && live && stored !== live) { setP(`${wkP(a, k)}.${f}`, live); snap = true; }
       const parts = String(v || '').match(/Kcal:\s*([\d.]+).*?P:\s*([\d.]+).*?CHO:\s*([\d.]+).*?G:\s*([\d.]+)/);
       const body = parts ? `<span class="kc"><b>${fmt(+parts[1])}</b> kcal</span><span><span class="kp">P ${fmt(+parts[2])}</span> · <span class="kcarb">C ${fmt(+parts[3])}</span> · <span class="kg">G ${fmt(+parts[4])}</span></span>` : (v ? esc(v) : '<span class="muted">Faltan los requerimientos de la etapa</span>');
       const tag = usePlan ? `<span class="mac-tag" title="Requerimientos de la etapa de esta semana (Plan › Planificación)">${ic('target', 11)} Etapa${k < cw ? ' actual' : ''}</span>` : `<span class="mac-tag past" title="Macros registrados durante esa semana">Registrado</span>`;
@@ -2492,44 +2712,53 @@
     const buscadoCell = (k) => {
       const own = num(wk(a, k).buscado), cfgV = stageTarget(stageOfWeek(a, k));
       const v = own != null ? own : cfgV;
-      return `<td class="pad0 busc-td${own != null ? ' manual' : ''}" style="min-width:96px">${I(`tracking.weeks.${k}.buscado`, { cls: 'cell', num: true, live: true, value: v != null ? v : '', ph: '—', attrs: own == null ? 'data-cfg="1"' : '' })}
+      return `<td class="pad0 busc-td${own != null ? ' manual' : ''}" style="min-width:96px">${I(`${wkP(a, k)}.buscado`, { cls: 'cell', num: true, live: true, value: v != null ? v : '', ph: '—', attrs: own == null ? 'data-cfg="1"' : '' })}
         ${own != null ? `<button type="button" class="busc-tag manual" data-action="resetBuscado" data-k="${k}" title="Ajuste manual de esta semana. Toca para volver al valor de la etapa (${cfgV != null ? fmtS(cfgV) + '%' : '—'})">Manual ↺</button>` : `<span class="busc-tag" title="Valor de la etapa (Plan › Planificación)">Etapa</span>`}</td>`;
+    };
+    // Rango de pérdida de la semana (etapas de pérdida): se define en la etapa (Plan › Planificación). Un % puesto a mano
+    // antes en esa semana se conserva como ajuste manual, con opción de volver al rango de la etapa.
+    const rangeCell = (k) => {
+      const r = weekRange(a, k), own = num(wk(a, k).buscado);
+      const tag = own != null ? (ro ? '<span class="busc-tag manual">Manual</span>' : `<button type="button" class="busc-tag manual" data-action="resetBuscado" data-k="${k}" title="Ajuste manual de esta semana (${fmtS(own)} % ± tolerancia). Toca para volver al rango de la etapa.">Manual ↺</button>`)
+        : r ? `<span class="busc-tag" title="Rango de la etapa${r.desde ? ` desde la semana ${r.desde}` : ''} (Plan › Planificación)">${esc(r.desde ? `${r.label} · desde sem. ${r.desde}` : r.label)}</span>` : '<span class="busc-tag manual" title="Elige el rango de pérdida de la etapa en Plan › Planificación">Sin rango</span>';
+      return `<td class="computed busc-td range-td${own != null ? ' manual' : ''}"><span class="nowrap">${r ? rangeTxt(r) : '—'}</span>${tag}</td>`;
     };
     const roText = (v) => `<td class="computed small" style="white-space:pre-wrap;min-width:170px">${v ? esc(v) : '<span class="muted">—</span>'}</td>`;
     const sc = trackScope(a, true); // semanas de la etapa que se consulta
     let body = '';
     for (let j = 0; j < sc.ks.length; j++) {
       const k = sc.ks[j];
-      const w = wk(a, k), avg = weekAvg(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
+      const w = wk(a, k), wo = wkOf(a, k), lossW = !!(wo.s && stageKind(wo.s) === 'loss'), avg = weekWeights(a, k).length ? weekAvg(a, k) : null, l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
       const hasDailySteps = weekDays(a, k).some((d) => num(dailyOf(a, d).pasos) != null);
       body += `<tr class="${k === cw ? 'today' : ''}">
-        <td class="lbl sticky-col">${scopeWeek(sc, k, j)}${scopeWeekSub(sc, k) ? `<div class="small muted" style="font-weight:400">${scopeWeekSub(sc, k)}</div>` : ''}</td>
+        <td class="lbl sticky-col">${weekLabel(a, k)}${k === cw ? ' <span class="pill gold">Actual</span>' : ''}</td>
         <td class="nowrap">${fmtDate(weekStart(a, k))}</td><td>${dayName(weekStart(a, k))}</td>
         <td class="${ro ? 'computed nowrap' : 'pad0'}${etapaMismatch(a, k) ? ' etapa-warn' : ''}" style="min-width:${ro ? 0 : 190}px">${etapaCell(a, k, 'cell', true)}</td>
         <td class="num computed"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td>
-        ${k === 0 ? '<td class="computed"></td>' : ro ? `<td class="num computed">${buscado(a, k) != null ? fmtS(buscado(a, k)) + '%' : '—'}</td>` : buscadoCell(k)}
-        <td class="num computed nowrap">${l != null ? `<span class="pill ${pillCls[st.key]}" title="${esc(st.label)}">${fmtS(l)}%</span>` : '—'}</td>
-        ${macCell(k, 'macrosE', pmOf(k).E)}${macCell(k, 'macrosD', pmOf(k).D)}
+        ${isBase(a, k) ? '<td class="computed"></td>' : lossW ? rangeCell(k) : ro ? `<td class="num computed">${buscado(a, k) != null ? fmtS(buscado(a, k)) + '%' : '—'}</td>` : buscadoCell(k)}
+        <td class="num computed nowrap">${l != null ? `<span class="pill ${pillCls[st.key]}" title="${esc(st.msg)}">${fmtS(l)}%</span>` : '—'}</td>
+        <td class="computed nowrap">${isBase(a, k) ? '<span class="muted small">Base</span>' : `<span class="pill ${pillCls[st.key]}" title="${esc(st.msg)}">${esc(st.label)}</span>`}</td>
+        ${wo.pre ? '<td class="computed"></td><td class="computed"></td>' : macCell(k, 'macrosE', pmOf(k).E) + macCell(k, 'macrosD', pmOf(k).D)}
         <td class="center">${!ro && k < cw && (w.macrosE || w.macrosD) && (w.macrosE !== pmOf(k).E || w.macrosD !== pmOf(k).D) && (pmOf(k).E || pmOf(k).D) ? `<button class="btn xs ghost" data-action="fillMacros" data-k="${k}" title="Reemplazar lo registrado por los requerimientos de la etapa de esa semana">${ic('copy', 13)}</button>` : ''}</td>
         ${hasDailySteps ? `<td class="num computed nowrap">${fmt(steps)}${stepsIncomplete(a, k) ? `<div class="inc-pill" title="Promedio parcial: faltan ${stepsIncomplete(a, k)} días por ingresar">Incompleto · ${weekStepsDays(a, k)}/7</div>` : ''}</td>` : c(k, 'pasos')}
         ${SCALES.map(([f], i) => avgCell(k, f, i === 0)).join('')}
         ${meals.idx.map((h, i) => avgCell(k, 'h' + h, i === 0)).join('')}
-        <td class="g-start"><div class="photo-thumbs">${(w.fotos || []).map((src, i) => `<img src="${imgSrc(src)}" data-action="viewPhoto" data-k="${k}" data-i="${i}" alt="Foto">`).join('')}${filePick(`tracking.weeks.${k}.fotos`, true, 'btn xs ghost icon', ic('camera', 13), 'title="Agregar foto"')}</div></td>
+        <td class="g-start"><div class="photo-thumbs">${(w.fotos || []).map((src, i) => `<img src="${imgSrc(src)}" data-action="viewPhoto" data-k="${k}" data-i="${i}" alt="Foto">`).join('')}${filePick(`${wkP(a, k)}.fotos`, true, 'btn xs ghost icon', ic('camera', 13), 'title="Agregar foto"')}</div></td>
       </tr>`;
     }
     if (snap) save(); // deja registrada la copia de la semana actual
     return `${mismatchCallout(a)}${noStagesNote(a, sc)}
     <div class="row seg-scope" style="justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap">
-      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)}).` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
+      <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.filter((k) => !wkOf(a, k).pre).length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)})${sc.ks.some((k) => wkOf(a, k).pre) ? ', con su semana previa' : ''}.` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
       ${stageSelect(a, sc, true)}
     </div>
-    <div class="muted" style="margin-bottom:6px">Peso y % logrado se calculan desde el registro diario. Si no hay pasos diarios registrados, puedes ingresar el promedio semanal a mano. El % buscado vacío toma el valor de la configuración.</div>
+    <div class="muted" style="margin-bottom:6px">Peso y % logrado se calculan desde el registro diario: el promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos 3 pesajes (o los días de pesaje de la etapa, si son menos). En las etapas de pérdida la meta es el rango de la etapa: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Si no hay pasos diarios registrados, puedes ingresar el promedio semanal a mano.</div>
     <div class="muted" style="margin-bottom:12px">Escalas y hambre son el <b>promedio de los días anotados</b> en el Registro diario. Si a la semana le faltan días, el promedio lleva <span class="inc-mini">4/7</span> (días con dato de 7).</div>
     <div class="table-wrap week-table-wrap">
       <table class="t wk-table">
         <thead>
-          <tr class="grp"><th class="sticky-col" colspan="1"></th><th colspan="9" style="border-left:0"></th><th></th><th colspan="${SCALES.length}" class="g-start">Escalas · promedio semanal (0-5)</th><th colspan="${meals.idx.length}" class="g-start">Hambre después de las comidas · promedio semanal (1-7)</th><th class="g-start"></th></tr>
-          <tr><th class="sticky-col">Semana</th><th>Fecha</th><th>Día</th><th>Etapa del proceso</th><th class="num">Peso</th><th class="num">% buscado</th><th class="num">% logrado</th><th>Macros días de entrenamiento</th><th>Macros días de descanso</th><th></th>
+          <tr class="grp"><th class="sticky-col" colspan="1"></th><th colspan="10" style="border-left:0"></th><th></th><th colspan="${SCALES.length}" class="g-start">Escalas · promedio semanal (0-5)</th><th colspan="${meals.idx.length}" class="g-start">Hambre después de las comidas · promedio semanal (1-7)</th><th class="g-start"></th></tr>
+          <tr><th class="sticky-col">Semana</th><th>Fecha</th><th>Día</th><th>Etapa del proceso</th><th class="num">Peso</th><th class="num">Meta semanal</th><th class="num">% logrado</th><th>Estado</th><th>Macros días de entrenamiento</th><th>Macros días de descanso</th><th></th>
             <th class="num">Prom. pasos</th>
             ${SCALES.map(([, lab], i) => `<th class="num${i === 0 ? ' g-start' : ''}">${lab}</th>`).join('')}
             ${meals.idx.map((h, i) => `<th class="num${i === 0 ? ' g-start' : ''}">${meals.head(h)}</th>`).join('')}
@@ -2615,13 +2844,21 @@
       if (!ch.vars.includes(id)) return;
       const unit = VAR_GROUPS.find((g) => g[0] === grp)[2];
       if (id === 'obj') {
-        const tg = stageTarget(s), pw = daily(STAGE_VARS[0][3]), w1 = pw.filter((p) => p.t < 7), own = num(s.pesoInicial);
-        const p0 = own ?? (w1.length ? mean(w1.map((p) => p.v)) : eff(a).peso), t0 = own != null || !w1.length ? 0 : Math.min(3, days);
-        if (p0 == null || tg == null) { out.push({ id, label, grp, unit, pts: [], dash: true, note: 'Falta el peso inicial o el objetivo' }); return; }
-        const f = (t) => p0 * Math.pow(1 + tg / 100, (t - t0) / 7), pts = [];
-        for (let t = 0; t < days; t += 7) pts.push({ t, v: f(t) });
-        pts.push({ t: days, v: f(days) });
-        out.push({ id, label, grp, unit, dash: true, pts: pts.map((p) => ({ ...p, tip: `Objetivo ${fmtDate(addDays(s.inicio, p.t))}: ${fmt(p.v, 2)} kg` })) });
+        // Etapas de pérdida: franja del rango (con sus cambios de rango); demás: trayectoria del % buscado.
+        const tg = stageTarget(s), loss = stageKind(s) === 'loss', pw = daily(STAGE_VARS[0][3]), w1 = pw.filter((p) => p.t < 7), own = num(s.pesoInicial);
+        const pre = weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1));
+        const p0 = own ?? (pre.length ? mean(pre) : w1.length ? mean(w1.map((p) => p.v)) : eff(a).peso), t0 = own != null || pre.length || !w1.length ? 0 : Math.min(3, days);
+        if (p0 == null || (loss ? !rangeOf(s) : tg == null)) { out.push({ id, label, grp, unit, pts: [], dash: true, note: loss ? 'Falta el peso inicial o el rango' : 'Falta el peso inicial o el objetivo' }); return; }
+        const acc = (t, rate) => { let f = 1; for (let j = 0; j * 7 < t; j++) f *= Math.pow(1 + rate(j) / 100, Math.min(7, t - j * 7) / 7); return f; };
+        const rLo = (j) => { const r = stageRange(s, j); return r ? -r.max : 0; }, rHi = (j) => { const r = stageRange(s, j); return r ? -r.min : 0; };
+        const ts = []; for (let t = 0; t < days; t += 7) ts.push(t); ts.push(days);
+        if (loss) {
+          const pts = ts.map((t) => ({ t, v: p0 * acc(t, rLo) / acc(t0, rLo), v2: p0 * acc(t, rHi) / acc(t0, rHi) }));
+          out.push({ id, label: 'Rango', grp, unit, dash: true, band: true, pts: pts.map((p) => ({ ...p, tip: `Rango ${fmtDate(addDays(s.inicio, p.t))}: ${fmt(p.v, 1)} – ${fmt(p.v2, 1)} kg` })) });
+        } else {
+          const f = (t) => p0 * Math.pow(1 + tg / 100, (t - t0) / 7);
+          out.push({ id, label, grp, unit, dash: true, pts: ts.map((t) => ({ t, v: f(t), tip: `Objetivo ${fmtDate(addDays(s.inicio, t))}: ${fmt(f(t), 2)} kg` })) });
+        }
         return;
       }
       const raw = daily(fn), pts = weekly ? byWeek(raw) : raw;
@@ -2635,7 +2872,7 @@
     const sx = (t) => L + (t / days) * (W - L - R);
     const ticks = Math.min(7, days);
     return VAR_GROUPS.filter(([g]) => series.some((x) => x.grp === g)).map(([g, gl, unit]) => {
-      const ser = series.filter((x) => x.grp === g), all = ser.flatMap((x) => x.pts.map((p) => p.v));
+      const ser = series.filter((x) => x.grp === g), all = ser.flatMap((x) => x.pts.flatMap((p) => (p.v2 != null ? [p.v, p.v2] : [p.v])));
       if (!all.length) return `<div class="sm-panel"><div class="sm-title">${gl} <span class="muted">· ${unit}</span></div><div class="muted small" style="padding:14px 0">Sin datos en estas fechas. Se anotan en «Registro diario de peso».</div></div>`;
       const H = g === 'peso' ? 220 : 170;
       let y0 = Math.min(...all), y1 = Math.max(...all);
@@ -2647,18 +2884,23 @@
       for (let i = 0; i <= nT; i++) { const v = y0 + ((y1 - y0) * i) / nT; grid += `<line x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}" stroke="var(--chart-grid)" stroke-width="1"/><text x="${L - 8}" y="${sy(v) + 4}" text-anchor="end" font-size="11" fill="var(--chart-label)">${fmt(v, g === 'esc' ? 0 : dec)}</text>`; }
       for (let i = 0; i <= ticks; i++) { const t = Math.round((days * i) / ticks); grid += `<text x="${sx(t)}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--chart-label)">${fmtDate(addDays(s.inicio, t), true)}</text>`; }
       // Etiquetas al final de cada línea, separadas para que no se pisen.
-      const labs = ser.filter((x) => x.pts.length).map((x) => { const lp = x.pts[x.pts.length - 1]; return { x, y: sy(lp.v), v: lp.v }; }).sort((p, q) => p.y - q.y);
+      const labs = ser.filter((x) => x.pts.length).map((x) => { const lp = x.pts[x.pts.length - 1]; return { x, lp, y: sy(lp.v2 != null ? (lp.v + lp.v2) / 2 : lp.v), v: lp.v }; }).sort((p, q) => p.y - q.y);
       for (let i = 1; i < labs.length; i++) if (labs[i].y - labs[i - 1].y < 14) labs[i].y = labs[i - 1].y + 14;
       const over = labs.length ? labs[labs.length - 1].y - (H - B) : 0; if (over > 0) labs.forEach((l) => { l.y -= over; });
       const marks = ser.map((x) => {
         if (!x.pts.length) return '';
         const col = varColor(x.id), d = x.pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.t).toFixed(1)},${sy(p.v).toFixed(1)}`).join(' ');
+        if (x.band) {
+          const top = x.pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.t).toFixed(1)},${sy(p.v2).toFixed(1)}`).join(' '), back = [...x.pts].reverse().map((p) => `L${sx(p.t).toFixed(1)},${sy(p.v).toFixed(1)}`).join(' ');
+          return `<path d="${top} ${back} Z" fill="var(--ok)" fill-opacity=".12" stroke="none"/><path d="${d}" fill="none" stroke="var(--ok)" stroke-opacity=".6" stroke-width="1.2" stroke-dasharray="4 4"/><path d="${top}" fill="none" stroke="var(--ok)" stroke-opacity=".6" stroke-width="1.2" stroke-dasharray="4 4"/>`
+            + x.pts.map((p) => `<circle cx="${sx(p.t).toFixed(1)}" cy="${sy((p.v + p.v2) / 2).toFixed(1)}" r="10" fill="transparent"><title>${esc(p.tip)}</title></circle>`).join('');
+        }
         const line = `<path d="${d}" fill="none" stroke="${col}" stroke-width="${x.dash ? 1.5 : 2}" ${x.dash ? 'stroke-dasharray="5 5"' : ''} stroke-linejoin="round" stroke-linecap="round"/>`;
         const pts = x.dash ? '' : x.pts.map((p) => `<circle cx="${sx(p.t).toFixed(1)}" cy="${sy(p.v).toFixed(1)}" r="${s.chart.modo === 'dia' ? 3 : 4}" fill="${col}" stroke="var(--surface)" stroke-width="2"/>`).join('');
         const hit = x.pts.map((p) => `<circle cx="${sx(p.t).toFixed(1)}" cy="${sy(p.v).toFixed(1)}" r="10" fill="transparent"><title>${esc(p.tip)}</title></circle>`).join('');
         return line + pts + hit;
       }).join('');
-      const tags = labs.map((l) => `<rect x="${W - R + 10}" y="${l.y - 4}" width="10" height="${l.x.dash ? 2 : 8}" rx="2" fill="${varColor(l.x.id)}"/><text x="${W - R + 26}" y="${l.y + 4}" font-size="12" fill="var(--text-2)">${esc(l.x.id === 'obj' ? 'Objetivo' : l.x.label)} ${fmt(l.v, dec)}</text>`).join('');
+      const tags = labs.map((l) => `<rect x="${W - R + 10}" y="${l.y - 4}" width="10" height="${l.x.band ? 8 : l.x.dash ? 2 : 8}" rx="2" fill="${l.x.band ? 'var(--ok)' : varColor(l.x.id)}"${l.x.band ? ' fill-opacity=".35"' : ''}/><text x="${W - R + 26}" y="${l.y + 4}" font-size="12" fill="var(--text-2)">${esc(l.x.id === 'obj' ? (l.x.band ? 'Rango' : 'Objetivo') : l.x.label)} ${l.x.band ? `${fmt(l.lp.v, dec)}–${fmt(l.lp.v2, dec)}` : fmt(l.v, dec)}</text>`).join('');
       return `<div class="sm-panel"><div class="sm-title">${gl} <span class="muted">· ${unit}</span></div>
         <div class="chart-box"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(gl)}: ${esc(ser.map((x) => x.label).join(', '))}">${grid}${marks}${tags}</svg></div></div>`;
     }).join('');
@@ -2669,11 +2911,11 @@
     const weekly = s.chart.modo !== 'dia', ts = [...new Set(ser.flatMap((x) => x.pts.map((p) => p.t)))].sort((x, y) => x - y);
     const head = (t) => { if (weekly) { const p = ser.flatMap((x) => x.pts).find((q) => q.t === t && q.k != null); return p ? `Semana ${p.k + 1}` : fmtDate(addDays(s.inicio, t)); } return fmtDate(addDays(s.inicio, t)); };
     return `<details class="mt8 stage-table"><summary>Ver los datos en una tabla</summary><div class="table-wrap mt8"><table class="t"><thead><tr><th>${weekly ? 'Semana' : 'Fecha'}</th>${ser.map((x) => `<th class="num">${esc(x.label)} <span class="muted">(${esc(x.unit)})</span></th>`).join('')}</tr></thead>
-      <tbody>${ts.map((t) => `<tr><td class="nowrap">${head(t)}</td>${ser.map((x) => { const p = x.pts.find((q) => q.t === t); return `<td class="num">${p ? fmt(p.v, x.grp === 'pasos' ? 0 : 1) : '—'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div></details>`;
+      <tbody>${ts.map((t) => `<tr><td class="nowrap">${head(t)}</td>${ser.map((x) => { const p = x.pts.find((q) => q.t === t); return `<td class="num">${p ? (p.v2 != null ? `${fmt(p.v, 1)} – ${fmt(p.v2, 1)}` : fmt(p.v, x.grp === 'pasos' ? 0 : 1)) : '—'}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div></details>`;
   }
   function stageChartBlock(a, s, i) {
     const ch = stageChartCfg(s);
-    const chips = VAR_GROUPS.map(([g, gl]) => `<div class="vgroup"><span class="vgroup-l">${gl}</span>${STAGE_VARS.filter((v) => v[2] === g).map(([id, l]) => {
+    const chips = VAR_GROUPS.map(([g, gl]) => `<div class="vgroup"><span class="vgroup-l">${gl}</span>${STAGE_VARS.filter((v) => v[2] === g).map(([id, l0]) => { const l = id === 'obj' && stageKind(s) === 'loss' ? 'Rango de pérdida' : l0;
       const on = ch.vars.includes(id);
       return `<button type="button" class="vchip${on ? ' on' : ''}" data-action="toggleStageVar" data-i="${i}" data-v="${id}" aria-pressed="${on}"><span class="sw${id === 'obj' ? ' dash' : ''}" style="--sw:${varColor(id)}"></span>${l}</button>`;
     }).join('')}</div>`).join('');
@@ -2713,6 +2955,23 @@
         : `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) aún no tiene resultados: complétala para poder traerlos, o anota los requerimientos a mano.`}</div>
     </div>`;
   }
+  // Rango de pérdida semanal de una etapa de pérdida, y sus cambios de rango desde una semana de la etapa.
+  function stageRangeBlock(a, s, i) {
+    const p = `tracking.config.stages.${i}`, n = stageDated(s) ? Math.ceil((daysBetween(s.inicio, s.fin) + 1) / 7) : null;
+    const pers = (path, r) => (r.rango === 'pers' ? `<span class="range-pers">${suffix(I(`${path}.rmin`, { num: true, live: true, ph: 'Mín.', attrs: 'aria-label="Pérdida semanal mínima"' }), '%')}<span class="muted">a</span>${suffix(I(`${path}.rmax`, { num: true, live: true, ph: 'Máx.', attrs: 'aria-label="Pérdida semanal máxima"' }), '%')}</span>` : '');
+    const g = num(s.grasaInicial), sug = g == null ? '' : g > 12 ? ` Con ${fmt(g, 1)} % de grasa inicial, la referencia es moderado.` : g <= 10 ? ` Con ${fmt(g, 1)} % de grasa inicial, la referencia es conservador.` : ` Con ${fmt(g, 1)} % de grasa inicial, elige según el atleta.`;
+    const tr = Array.isArray(s.tramos) ? s.tramos : [];
+    return `<div class="stage-objs stage-range mt16">
+      <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Rango de pérdida semanal <span class="muted">· % del peso corporal</span></div>
+        <button class="btn sm" data-action="addTramo" data-i="${i}" ${n && n < 2 ? 'disabled' : ''}>${ic('plus', 14)} Cambiar el rango desde una semana</button></div>
+      <div class="range-rows mt8">
+        <div class="range-row"><span class="range-when">${tr.length ? 'Desde la semana 1' : 'Toda la etapa'}</span>${SEL(`${p}.rango`, RANGO_OPTS, { attrs: `aria-label="Rango de pérdida de la etapa ${i + 1}"` })}${pers(p, s)}</div>
+        ${tr.map((t, j) => `<div class="range-row"><span class="range-when">Desde la semana ${I(`${p}.tramos.${j}.desde`, { num: true, live: true, cls: 'input range-wk', attrs: `aria-label="Semana desde la que rige el cambio ${j + 1}"` })}</span>${SEL(`${p}.tramos.${j}.rango`, RANGO_OPTS, { attrs: `aria-label="Rango del cambio ${j + 1}"` })}${pers(`${p}.tramos.${j}`, t)}
+          <button class="btn sm ghost icon danger" data-action="delTramo" data-i="${i}" data-j="${j}" title="Quitar este cambio de rango" aria-label="Quitar el cambio de rango ${j + 1}">${ic('trash', 14)}</button></div>`).join('')}
+      </div>
+      <div class="hint mt8">Bajo el rango: lento (no necesariamente malo) · dentro: adecuado · sobre el rango: rápido. Moderado 0,5 – 1 % y conservador 0,3 – 0,5 % de pérdida por semana; referencia: sobre 12–13 % de grasa, moderado; 10 % o menos, conservador.${sug}${n ? ` La etapa tiene ${n} ${n === 1 ? 'semana' : 'semanas'}; un cambio de rango rige desde esa semana hasta el final o hasta el siguiente cambio.` : ''}</div>
+    </div>`;
+  }
   // Lista de objetivos de una etapa (se pueden agregar y quitar). Salen en el documento que se descarga.
   function stageObjetivos(s, i) {
     if (!Array.isArray(s.objetivos)) s.objetivos = [''];
@@ -2733,22 +2992,24 @@
     const pill = !s.tipo ? '<span class="pill">No se usa</span>'
       : stt === 'now' ? '<span class="pill ok">En curso</span>' : stt === 'next' ? `<span class="pill${isCur ? ' gold' : ''}">Próxima</span>` : stt === 'done' ? '<span class="pill">Terminada</span>' : '<span class="pill warn">Sin fechas</span>';
     const nObj = (s.objetivos || []).filter((x) => String(x || '').trim()).length;
-    const brief = !s.tipo ? '' : [num(s.objetivo) != null ? stageObjTxt(s) : '', `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`, stageHasReqs(a, s) ? 'con requerimientos' : 'sin requerimientos'].filter(Boolean).join(' · ');
+    const brief = !s.tipo ? '' : [stageObjTxt(s), `${nObj} ${nObj === 1 ? 'objetivo' : 'objetivos'}`, stageHasReqs(a, s) ? 'con requerimientos' : 'sin requerimientos'].filter(Boolean).join(' · ');
     const date = (k, label) => `<div class="field"><label for="st-${s.id}-${k}">${label}</label>${D(`${p}.${k}`, `st-${s.id}-${k}`)}</div>`;
     const sub = !s.tipo ? 'Elige un objetivo para usar esta etapa' : stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas: aún no se refleja en el registro';
     let fields = '';
     if (!s.tipo) fields = '<div class="callout small mt16"><b>Etapa sin determinar.</b> No se usa en ninguna parte del proceso (calendario, registro, seguimiento, requerimientos ni documento), aunque tenga fechas. Elige un objetivo cuando quieras activarla.</div>';
     else {
       const dly = a.tracking.daily || {}, w1 = stageDated(s) ? Object.keys(dly).filter((d) => d >= s.inicio && d < addDays(s.inicio, 7)).map((d) => num(dly[d].peso)).filter((v) => v != null) : [];
-      const auto = w1.length ? mean(w1) : eff(a).peso, autoTxt = w1.length ? 'promedio de los pesajes de su 1.ª semana' : 'peso de Requerimientos';
+      const pre = stageDated(s) ? weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1)) : [];
+      const auto = pre.length ? mean(pre) : w1.length ? mean(w1) : eff(a).peso, autoTxt = pre.length ? 'promedio de los 7 días previos a la etapa' : w1.length ? 'promedio de los pesajes de su 1.ª semana' : 'peso de Requerimientos';
       const nE = (s.diasEntreno || []).length, nP = (s.diasPeso || []).length;
       fields = `
-        <div class="grid g4 mt16">
+        <div class="grid ${stageKind(s) === 'loss' ? 'g3' : 'g4'} mt16">
           ${F('Peso inicial', suffix(I(`${p}.pesoInicial`, { num: true, live: true, ph: auto != null ? fmt(auto, 1) : '—' }), 'kg'), auto != null ? `Vacío: se usa el ${autoTxt}.` : 'Se usa para la trayectoria objetivo.')}
           ${F('% de grasa inicial', suffix(I(`${p}.grasaInicial`, { num: true, ph: 'Si corresponde' }), '%'), 'Opcional.')}
           ${F('Meta de pasos diarios', I(`${p}.pasos`, { num: true, ph: 'Ej.: 10000' }), 'Se muestra en el panel de la semana.')}
-          ${(() => { const of = stageObjField(s); return F(of.label, suffix(I(`${p}.objetivo`, { num: true, live: true, ph: of.ph }), '% / sem'), of.hint); })()}
+          ${stageKind(s) === 'loss' ? '' : (() => { const of = stageObjField(s); return F(of.label, suffix(I(`${p}.objetivo`, { num: true, live: true, ph: of.ph }), '% / sem'), of.hint); })()}
         </div>
+        ${stageKind(s) === 'loss' ? stageRangeBlock(a, s, i) : ''}
         <div class="grid g2 mt16">
           <div class="field"><label>Días de entrenamiento</label>${dayPicker(i, 'diasEntreno', s)}<div class="hint">${nE ? `${nE} ${nE === 1 ? 'día' : 'días'} por semana.` : 'Toca los días que entrena.'} Se marcan en el registro diario.</div></div>
           <div class="field"><label>Días de reporte de peso</label>${dayPicker(i, 'diasPeso', s)}<div class="hint">${nP ? `${nP} ${nP === 1 ? 'pesaje' : 'pesajes'} por semana.` : 'Toca los días de pesaje.'}${nP && nP < 3 ? ' Mínimo recomendado: 3.' : ''} Se marcan en el registro diario.</div></div>
@@ -2769,7 +3030,8 @@
   }
   // Configuración del proceso: va al inicio de Plan › Planificación.
   function processConfig(a) {
-    const st = stagesOf(a), al = stageAlerts(a), N = weekCount(a), c0 = cfgOf(a).inicio, dated = st.some(stageDated);
+    const st = stagesOf(a), al = stageAlerts(a), dated = st.filter(stageDated), nW = timeline(a).filter((w) => w.s).length;
+    const d0 = dated.length ? dated.map((x) => x.inicio).sort()[0] : null, d1 = dated.length ? dated.map((x) => x.fin).sort().pop() : null;
     return `<div class="pf-block" id="config-proceso">
       <div class="pf-block-head row" style="justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap"><div><h2>Configuración del proceso</h2><p class="muted small">Etapas del atleta con sus fechas, metas, objetivos y gráficos. Lo que definas aquí manda en el resto de la app.</p></div>
         ${st.length ? (st.every((x) => collapsed.has(x.id))
@@ -2777,25 +3039,26 @@
           : `<button class="btn sm ghost" data-action="collapseStages">${ic('arrowUp', 14)} Contraer todas</button>`) : ''}</div>
     ${al.length ? `<div class="callout alert-callout" role="alert"><b>Revisa las fechas de las etapas</b><ul class="alert-list">${al.map((x) => `<li>${x}</li>`).join('')}</ul>
       <div class="row mt8" style="gap:8px;flex-wrap:wrap">${mismatchWeeks(a).length ? '<button class="btn sm" data-action="applyStageDates">Usar las fechas de las etapas en todas las semanas</button>' : ''}${manualBuscadoWeeks(a).length ? '<button class="btn sm" data-action="resetAllBuscado">Usar el objetivo de las etapas en todas las semanas</button>' : ''}</div></div>` : ''}
-    <section class="card${al.length ? ' mt16' : ''}"><div class="card-head"><h3>Calendario del seguimiento</h3><span class="sub">${dated ? 'Se arma con las fechas de las etapas' : 'Define las fechas de una etapa para armarlo'}</span></div>
+    <section class="card${al.length ? ' mt16' : ''}"><div class="card-head"><h3>Calendario del seguimiento</h3><span class="sub">${dated.length ? 'Se arma con las fechas de las etapas' : 'Define las fechas de una etapa para armarlo'}</span></div>
       <div class="card-body grid g3">
-        ${F('Semana inicial', `<input class="input" value="${fmtDate(c0)}" disabled>`, 'Primer día de la primera etapa.')}
-        ${F('Último día', `<input class="input" value="${fmtDate(addDays(c0, 7 * (N + 1) - 1))} · ${weekLabel(N)}" disabled>`, `${N + 1} semanas en el registro diario y el seguimiento semanal.`)}
-        ${F('Tolerancia (± puntos porcentuales)', suffix(I('tracking.config.tol', { num: true }), 'pp'), 'Margen para considerar que una semana va «en ritmo».')}
+        ${F('Primer día', `<input class="input" value="${d0 ? fmtDate(d0) : '—'}" disabled>`, d0 ? `Inicio de la primera etapa. Antes va su semana previa (desde el ${fmtDate(addDays(d0, -7))}), base para comparar la semana 1.` : 'Inicio de la primera etapa.')}
+        ${F('Último día', `<input class="input" value="${d1 ? fmtDate(d1) : '—'}" disabled>`, dated.length ? `${nW} ${nW === 1 ? 'semana' : 'semanas'} de etapa. Cada etapa cuenta sus semanas desde su fecha inicial.` : '')}
+        ${F('Tolerancia (± puntos porcentuales)', suffix(I('tracking.config.tol', { num: true }), 'pp'), 'Para las etapas que no son de pérdida (mantenimiento, ganancia…): margen para considerar que una semana va «en ritmo». Las de pérdida usan su rango.')}
       </div></section>
     ${st.map((s, i) => stageCard(a, s, i)).join('')}
     <div class="row mt16"><button class="btn primary" data-action="addStage">${ic('plus', 15)} Agregar siguiente etapa</button></div>
     <div class="callout mt16 small"><b>Qué manda cada dato de la etapa.</b>
       <ul class="alert-list">
-        <li><b>Fechas:</b> arman el calendario del registro diario y del seguimiento semanal, y dicen a qué etapa pertenece cada semana.</li>
+        <li><b>Fechas:</b> arman las semanas del registro diario y del seguimiento semanal. Cada etapa cuenta sus semanas desde su fecha inicial (la semana 1 empieza ese día) y se compara con los 7 días anteriores.</li>
         <li><b>Requerimientos de la etapa:</b> los de la etapa vigente son las metas de calorías y macros del menú diario, la distribución, el documento y el plan del cliente; los de cada etapa, los macros de sus semanas en el seguimiento semanal. Se anotan a mano o se traen de la calculadora (Plan › Requerimientos), que no se aplica sola.</li>
-        <li><b>Objetivo semanal (% del peso):</b> es el % buscado de cada semana de la etapa: de pérdida en pérdida de grasa, mini cut y preparación; de aumento en ganancia de masa muscular y reverse diet; con signo en mantenimiento y las demás (0 = mantener).</li>
+        <li><b>Rango de pérdida (pérdida de grasa, mini cut y preparación):</b> moderado 0,5 – 1 %, conservador 0,3 – 0,5 % o personalizado, y puede cambiar desde una semana de la etapa. Bajo el rango la semana es lenta, dentro es adecuada y sobre el rango es rápida.</li>
+        <li><b>Objetivo semanal (% del peso), en las demás etapas:</b> de aumento en ganancia de masa muscular y reverse diet; con signo en mantenimiento y las demás (0 = mantener), con la tolerancia de arriba.</li>
         <li><b>Días de entrenamiento:</b> definen el tipo de día (entrenamiento o descanso) del calendario de alimentación y las comidas de «Hambre» del registro diario.</li>
         <li><b>Días de reporte de peso y meta de pasos:</b> son las metas que muestran el panel y el registro diario.</li>
         <li><b>Peso inicial:</b> punto de partida de la trayectoria objetivo y del seguimiento.</li>
         <li><b>Objetivos escritos:</b> salen en el documento que se descarga.</li>
       </ul>
-      Una etapa «Sin determinar» o sin fechas no se usa. El número que manda en el seguimiento es el % de cambio semanal del peso promedio: bajar más rápido que el objetivo no es mejor, en una etapa de definición se paga con músculo.</div></div>`;
+      Una etapa «Sin determinar» o sin fechas no se usa. El número que manda en el seguimiento es el % de cambio de la media de 7 días (el promedio de los últimos 7 días frente a los 7 anteriores), con al menos 3 pesajes en cada bloque: bajar más rápido que el rango no es mejor, en una etapa de definición se paga con músculo.</div></div>`;
   }
 
 
@@ -2901,7 +3164,7 @@
     return `<aside class="sidebar" id="plan-sidebar" aria-label="Secciones del portal">
       <div class="sb-head">
         <div class="sb-athlete"><span class="avatar sm">${esc(initials)}</span>
-          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Mi portal')}</b><span>${esc(weekEtapa(a, cw))} · Semana ${cw}/${weekCount(a)}</span></div></div>
+          <div class="sb-ath-text"><b>${esc(a.q.nombre || 'Mi portal')}</b><span>${esc(weekEtapa(a, cw))} · ${esc(posTxt(a, cw))}</span></div></div>
         <button class="btn xs ghost icon sb-close" data-action="closeDrawer" aria-label="Cerrar panel">${ic('x', 15)}</button>
       </div>
       <nav class="sb-nav">
@@ -3063,7 +3326,7 @@
     .pd-stats{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:11.5px;margin-bottom:10px}
     .pd-scroll{overflow-x:auto}.pd-wk{min-width:600px;font-size:10px}.pd-wk th,.pd-wk td{padding:3px 4px}.pd-wk th{vertical-align:bottom}.pd-wk td{white-space:nowrap}.pd-wk th:nth-child(3),.pd-wk td:nth-child(3){text-align:left}
     .pd-pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#eee;color:#555;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}
+    .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}.pd-pill.slow{background:#e3eefc;color:#1f5aa6}
     .pd-foot{font-size:10.5px;color:#666;margin:8px 0 0}
     .pd-stage{margin-bottom:16px;break-inside:avoid}.pd-stage-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border-bottom:1.5px solid #d8b15f;padding-bottom:5px;margin-bottom:6px}
     .pd-stage-h b{font-size:15px}.pd-stage-h span:last-child{margin-left:auto;font-size:11.5px;color:#333}
@@ -3153,7 +3416,7 @@
         const s = x.s, meta = [];
         (a.dayTypes || []).forEach((dt) => { const t = stageTargets(a, s, dt); if (t.ok) meta.push([`Requerimientos · ${dt.name}`, calcLine(t)]); });
         if (stageFull(s)) {
-          if (num(s.objetivo) != null) meta.push(['Objetivo', stageObjTxt(s)]);
+          const ot = stageObjTxt(s); if (ot) meta.push(['Objetivo', ot]);
           if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
           if (num(s.grasaInicial) != null) meta.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
           if (num(s.pasos) != null) meta.push(['Meta de pasos', fmt(num(s.pasos))]);
@@ -3204,16 +3467,16 @@
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
     const sc = (k, f) => { const v = weekField(a, k, f).avg; return v != null ? fmt(v, 1) : '—'; };
     const seg = any ? `<div class="pd-stats">
-        <span>Inicio: <b>${fmtDate(cfg.inicio)}</b></span><span>Semana actual: <b>${cw} de ${weekCount(a)}</b></span>
+        <span>Inicio: <b>${fmtDate(cfg.inicio)}</b></span><span>Semana actual: <b>${esc(weekEtapa(a, cw))} · ${esc(posTxt(a, cw))}</b></span>
         ${p0 != null ? `<span>Peso inicial: <b>${fmt(p0, 2)} kg</b></span>` : ''}
-        ${pL != null && kLast > 0 ? `<span>Último promedio (${weekLabel(kLast).toLowerCase()}): <b>${fmt(pL, 2)} kg</b></span>` : ''}
+        ${pL != null && kLast > 0 ? `<span>Último promedio (${esc(weekName(a, kLast))}): <b>${fmt(pL, 2)} kg</b></span>` : ''}
         ${p0 && pL != null && kLast > 0 ? `<span>Cambio total: <b>${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)</b></span>` : ''}
       </div>
-      <div class="pd-scroll"><table class="pd-wk"><thead><tr><th>Semana</th><th>Inicio</th><th>Etapa</th><th>Peso (kg)</th><th>% buscado</th><th>% logrado</th><th>Estado</th><th>Pasos</th>${SCALES.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
+      <div class="pd-scroll"><table class="pd-wk"><thead><tr><th>Semana</th><th>Inicio</th><th>Etapa</th><th>Peso (kg)</th><th>Meta</th><th>% logrado</th><th>Estado</th><th>Pasos</th>${SCALES.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
         ${ks.map((k) => { const avg = weekAvg(a, k), b = buscado(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
-          return `<tr><td><b>${k === 0 ? 'Inicial' : weekLabel(k)}</b></td><td>${fmtDate(weekStart(a, k), true)}</td><td>${esc(weekEtapa(a, k))}</td><td>${avg != null ? fmt(avg, 2) : '—'}</td><td>${b != null ? fmtS(b) + '%' : '—'}</td><td>${l != null ? fmtS(l) + '%' : '—'}</td><td><span class="pd-pill ${st.key}">${esc(st.label)}</span></td><td>${steps != null ? fmt(steps) : '—'}</td>${SCALES.map(([f]) => `<td>${sc(k, f)}</td>`).join('')}</tr>`; }).join('')}
+          return `<tr><td><b>${esc(weekLabel(a, k))}</b></td><td>${fmtDate(weekStart(a, k), true)}</td><td>${esc(weekEtapa(a, k))}</td><td>${avg != null ? fmt(avg, 2) : '—'}</td><td>${isBase(a, k) ? '' : metaTxt(a, k)}</td><td>${l != null ? fmtS(l) + '%' : '—'}</td><td><span class="pd-pill ${st.key}">${esc(st.label)}</span></td><td>${steps != null ? fmt(steps) : '—'}</td>${SCALES.map(([f]) => `<td>${sc(k, f)}</td>`).join('')}</tr>`; }).join('')}
       </tbody></table></div>
-      <p class="pd-foot">Peso: promedio de los días registrados en la semana. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
+      <p class="pd-foot">Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
       : '<p class="pd-empty">Aún no hay registros de seguimiento.</p>';
     const sec = (n, title, html, brk = true) => `<section class="pd-sec${brk ? ' pd-break' : ''}"><div class="pd-sec-title"><span>${n}</span>${title}</div>${html}</section>`;
     if (sheets) {
@@ -3485,18 +3748,18 @@
     const cw = currentWeek(a), cfg = cfgOf(a), ks = Array.from({ length: cw + 1 }, (_, k) => k);
     const withAvg = ks.filter((k) => weekAvg(a, k) != null), any = withAvg.some((k) => weekWeights(a, k).length) || ks.some((k) => weekSteps(a, k) != null || SCALES.some(([f]) => weekField(a, k, f).avg != null));
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
-    const PILL = { ok: ['#17663f', '#e0f3e8'], warn: ['#8a5200', '#fdefd6'], bad: ['#a12626', '#fbe2e2'], none: ['#555', '#eeeeee'] };
+    const PILL = { ok: ['#17663f', '#e0f3e8'], warn: ['#8a5200', '#fdefd6'], bad: ['#a12626', '#fbe2e2'], slow: ['#1f5aa6', '#e3eefc'], none: ['#555', '#eeeeee'] };
     const r = (t) => ({ text: t, alignment: 'right' });
     const stat = (l, v) => [{ text: l + ': ' }, { text: v + '      ', bold: true }];
     const seg = any ? [
-      { text: [].concat(stat('Inicio', fmtDate(cfg.inicio)), stat('Semana actual', `${cw} de ${weekCount(a)}`), p0 != null ? stat('Peso inicial', `${fmt(p0, 2)} kg`) : [], pL != null && kLast > 0 ? stat(`Último promedio (${weekLabel(kLast).toLowerCase()})`, `${fmt(pL, 2)} kg`) : [], p0 && pL != null && kLast > 0 ? stat('Cambio total', `${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)`) : []), fontSize: 8.5, margin: [0, 0, 0, 8] },
+      { text: [].concat(stat('Inicio', fmtDate(cfg.inicio)), stat('Semana actual', `${weekEtapa(a, cw)} · ${posTxt(a, cw)}`), p0 != null ? stat('Peso inicial', `${fmt(p0, 2)} kg`) : [], pL != null && kLast > 0 ? stat(`Último promedio (${weekName(a, kLast)})`, `${fmt(pL, 2)} kg`) : [], p0 && pL != null && kLast > 0 ? stat('Cambio total', `${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)`) : []), fontSize: 8.5, margin: [0, 0, 0, 8] },
       { table: { headerRows: 1, widths: [38, 22, '*', 28, 34, 34, 46, 26, 40, 24, 24, 34, 32],
-        body: [[th('Semana'), th('Inicio'), th('Etapa'), th('Peso (kg)', 'right'), th('% buscado', 'right'), th('% logrado', 'right'), th('Estado', 'center'), th('Pasos', 'right')].concat(SCALES.map(([, l]) => th(l, 'right')))].concat(ks.map((k) => {
+        body: [[th('Semana'), th('Inicio'), th('Etapa'), th('Peso (kg)', 'right'), th('Meta', 'right'), th('% logrado', 'right'), th('Estado', 'center'), th('Pasos', 'right')].concat(SCALES.map(([, l]) => th(l, 'right')))].concat(ks.map((k) => {
           const avg = weekAvg(a, k), b = buscado(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k), pc = PILL[st.key] || PILL.none;
-          return [{ text: k === 0 ? 'Inicial' : weekLabel(k), bold: true }, fmtDate(weekStart(a, k), true), str(weekEtapa(a, k)), r(avg != null ? fmt(avg, 2) : '—'), r(b != null ? fmtS(b) + '%' : '—'), r(l != null ? fmtS(l) + '%' : '—'),
+          return [{ text: weekLabel(a, k), bold: true }, fmtDate(weekStart(a, k), true), str(weekEtapa(a, k)), r(avg != null ? fmt(avg, 2) : '—'), r(isBase(a, k) ? '' : metaTxt(a, k)), r(l != null ? fmtS(l) + '%' : '—'),
             { text: st.label, bold: true, color: pc[0], fillColor: pc[1], alignment: 'center' }, r(steps != null ? fmt(steps) : '—')].concat(SCALES.map(([f]) => { const v = weekField(a, k, f).avg; return r(v != null ? fmt(v, 1) : '—'); }));
         })) }, layout: Object.assign({}, lines, { paddingLeft: () => 3, paddingRight: () => 3 }), fontSize: 7.5 },
-      { text: 'Peso: promedio de los días registrados en la semana. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
+      { text: 'Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
     ] : [empty('Aún no hay registros de seguimiento.')];
 
     return pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, [].concat(
@@ -3863,12 +4126,20 @@
       ch.vars = ch.vars.includes(v) ? ch.vars.filter((x) => x !== v) : [...ch.vars, v]; commit();
     },
     setStageMode(el) { const s = stagesOf(A())[+el.dataset.i]; if (!s) return; stageChartCfg(s).modo = el.dataset.v === 'dia' ? 'dia' : 'semana'; commit(); },
-    resetEtapa(el) { const w = A().tracking.weeks[el.dataset.k]; if (w) delete w.etapa; commit(); },
+    resetEtapa(el) { const a = A(), w = a.tracking.weeks[wkKey(a, +el.dataset.k)]; if (w) delete w.etapa; commit(); },
     applyStageDates() {
       const a = A(), mm = mismatchWeeks(a);
-      mm.forEach((x) => { delete a.tracking.weeks[x.k].etapa; });
+      mm.forEach((x) => { const w = a.tracking.weeks[wkKey(a, x.k)]; if (w) delete w.etapa; });
       toast(`${mm.length} ${mm.length === 1 ? 'semana vuelve' : 'semanas vuelven'} a la etapa de sus fechas.`); commit();
     },
+    addTramo(el) {
+      const s = stagesOf(A())[+el.dataset.i]; if (!s) return;
+      if (!Array.isArray(s.tramos)) s.tramos = [];
+      const n = stageDated(s) ? Math.ceil((daysBetween(s.inicio, s.fin) + 1) / 7) : 10, last = tramosOf(s).pop(), base = (last || s).rango;
+      s.tramos.push({ desde: clamp(last ? num(last.desde) + 1 : 5, 2, Math.max(2, n)), rango: base === 'mod' ? 'cons' : base === 'cons' ? 'mod' : '', rmin: null, rmax: null });
+      commit();
+    },
+    delTramo(el) { const s = stagesOf(A())[+el.dataset.i]; if (s && Array.isArray(s.tramos)) { s.tramos.splice(+el.dataset.j, 1); commit(); } },
     addObjetivo(el) {
       const i = +el.dataset.i, s = stagesOf(A())[i]; if (!s) return;
       if (!Array.isArray(s.objetivos)) s.objetivos = [];
@@ -3991,30 +4262,30 @@
     goToday() {
       const a = A(), k = currentWeek(a);
       // Si la semana actual no está en la etapa que se consulta, se pasa a la etapa (o a «Sin etapa») que la contiene.
-      if (!trackScope(a, true).ks.includes(k)) { const st = stageOfWeek(a, k); a.ui.panelStage = st ? st.id : '__none'; save(); render(); }
-      if (isFolded(A(), k)) { wkFold[k] = false; lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); }
+      if (!trackScope(a, true).ks.includes(k)) { const w = wkOf(a, k); a.ui.panelStage = w.s ? w.s.id : w.pre ? w.forS.id : '__none'; save(); render(); }
+      if (isFolded(A(), k)) { wkFold[weekStart(A(), k)] = false; lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); }
       setTimeout(() => document.getElementById(`wk-${k}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 30);
     },
-    foldWeek(el) { const a = A(), k = +el.dataset.k; wkFold[k] = !isFolded(a, k); lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); },
+    foldWeek(el) { const a = A(), k = +el.dataset.k; wkFold[weekStart(a, k)] = !isFolded(a, k); lsSet('prepcoach-wkfold', JSON.stringify(wkFold)); render(); },
     toggleDailyCol(el) { dailyShow[el.dataset.g] = el.checked; lsSet('prepcoach-dailycols', JSON.stringify(dailyShow)); render(); },
     resetAllBuscado() {
       const a = A(), mb = manualBuscadoWeeks(a);
-      confirmModal('Usar el objetivo de las etapas', `Se quitará el % buscado manual de <b>${mb.length}</b> ${mb.length === 1 ? 'semana' : 'semanas'}: usarán el objetivo de su etapa.`, () => {
-        mb.forEach((x) => { delete a.tracking.weeks[x.k].buscado; }); closeModal(); commit();
-      }, 'Usar el de las etapas');
+      confirmModal('Usar la meta de las etapas', `Se quitará el % buscado manual de <b>${mb.length}</b> ${mb.length === 1 ? 'semana' : 'semanas'}: usarán la meta de su etapa (rango de pérdida u objetivo semanal).`, () => {
+        mb.forEach((x) => { const w = a.tracking.weeks[wkKey(a, x.k)]; if (w) delete w.buscado; }); closeModal(); commit();
+      }, 'Usar la de las etapas');
     },
-    resetBuscado(el) { const w = A().tracking.weeks[el.dataset.k]; if (w) delete w.buscado; commit(); },
+    resetBuscado(el) { const a = A(), w = a.tracking.weeks[wkKey(a, +el.dataset.k)]; if (w) delete w.buscado; commit(); },
     fillMacros(el) {
-      const a = A(), k = el.dataset.k, pm = planMacros(a, stageOfWeek(a, +k));
-      setP(`tracking.weeks.${k}.macrosE`, pm.E); setP(`tracking.weeks.${k}.macrosD`, pm.D);
+      const a = A(), k = +el.dataset.k, pm = planMacros(a, stageOfWeek(a, k));
+      setP(`${wkP(a, k)}.macrosE`, pm.E); setP(`${wkP(a, k)}.macrosD`, pm.D);
       commit();
     },
-    addPhoto(el) { pendingImg = { path: `tracking.weeks.${el.dataset.k}.fotos`, push: true }; $('#file-input').click(); },
+    addPhoto(el) { pendingImg = { path: `${wkP(A(), +el.dataset.k)}.fotos`, push: true }; $('#file-input').click(); },
     viewPhoto(el) {
-      const k = el.dataset.k, i = +el.dataset.i, src = wk(A(), k).fotos[i];
-      openModal(`<div class="lightbox"><img src="${imgSrc(src)}" alt="Foto de referencia"></div><div class="modal-foot"><span class="muted small" style="margin-right:auto">${weekLabel(+k)} · ${fmtDate(weekStart(A(), +k))}</span><button class="btn danger" data-action="delPhoto" data-k="${k}" data-i="${i}">${ic('trash', 14)} Eliminar</button><button class="btn" data-action="closeModal">Cerrar</button></div>`, null, true);
+      const k = el.dataset.k, i = +el.dataset.i, src = wk(A(), +k).fotos[i];
+      openModal(`<div class="lightbox"><img src="${imgSrc(src)}" alt="Foto de referencia"></div><div class="modal-foot"><span class="muted small" style="margin-right:auto">${esc(weekName(A(), +k))} · ${fmtDate(weekStart(A(), +k))}</span><button class="btn danger" data-action="delPhoto" data-k="${k}" data-i="${i}">${ic('trash', 14)} Eliminar</button><button class="btn" data-action="closeModal">Cerrar</button></div>`, null, true);
     },
-    delPhoto(el) { wk(A(), el.dataset.k).fotos.splice(+el.dataset.i, 1); closeModal(); commit(); },
+    delPhoto(el) { const w = wk(A(), +el.dataset.k); if (Array.isArray(w.fotos)) w.fotos.splice(+el.dataset.i, 1); closeModal(); commit(); },
 
     addFood() {
       // Abre la ficha «Nuevo alimento» sobre la tabla; el alimento entra en la base solo al pulsar «Guardar alimento».
@@ -4254,11 +4525,14 @@
     const reqsSeeded = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.reqsSeeded);
     const signedOk = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.signedObj);
     const hadStages = !!(a.tracking && isPlain(a.tracking.config) && Array.isArray(a.tracking.config.stages));
+    const byDate = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.weeksByDate);
+    const rangosOk = !!(a.tracking && isPlain(a.tracking.config) && a.tracking.config.rangos);
     a.tracking = a.tracking || base.tracking; a.tracking.config = Object.assign(base.tracking.config, a.tracking.config || {});
     a.tracking.weeks = a.tracking.weeks || {}; a.tracking.daily = a.tracking.daily || {};
     // Antes de las etapas: se arman desde la configuración anterior (y el mini cut del plan), sin perder metas.
     if (!hadStages) { a.tracking.config.stages = stagesFromLegacy(a.tracking, a.minicut); keepLegacyTargets(a.tracking); }
     moveWeeklyToDaily(a.tracking);
+    if (!byDate) weeksToDates(a.tracking); // datos semanales: de número de semana a fecha de inicio
     a.ui = Object.assign(base.ui, a.ui || {});
     if (!a.dayTypes || !a.dayTypes.length) { a.dayTypes = base.dayTypes; a.activeDay = base.activeDay; }
     a.portal = Object.assign(newPortal(), isPlain(a.portal) ? a.portal : {});
@@ -4267,6 +4541,7 @@
     moveObjetivosToStage(a);
     if (!reqsSeeded) seedStageReqs(a); else a.tracking.config.stages.forEach((x) => { if (!isPlain(x.reqs)) x.reqs = {}; });
     if (!signedOk) signStageObjs(a.tracking.config);
+    if (!rangosOk) setStageRanges(a.tracking.config); else ensureTramos(a.tracking.config);
     syncTimeline(a);
     return a;
   }
