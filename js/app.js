@@ -64,6 +64,7 @@
     calc: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M8 6h8M8 11h.01M12 11h.01M16 11h.01M8 15h.01M12 15h.01M16 15h.01M8 19h8"/>',
     clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     menu: '<path d="M3 11h18M5 11a7 7 0 0 1 14 0M4 15h16l-1 4H5z"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
     chart: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
     db: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -187,7 +188,7 @@
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
       tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, signedObj: true, weeksByDate: true, rangos: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
-      ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd' }, // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
+      ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd', menuView: 'dia' }, // menuView: 'dia' (comidas del tipo de día) o 'recetas' (recetario) // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
     };
@@ -199,6 +200,7 @@
       v: 1,
       foods: (window.SEED_FOODS || []).map(([name, porcion, gpp, kcal, p, c, g], i) => ({ id: 's' + i, name, porcion, gpp, kcal, p, c, g })),
       athletes: [], activeId: null,
+      recipes: [], // recetario del coach (Plan › Menú diario › Recetario): se comparte entre atletas
     };
   }
 
@@ -1835,7 +1837,7 @@
     const views = { req: viewReq, planif: viewPlanif, menu: viewMenu, dist: viewDist, minuta: viewMinuta, alimentos: viewFoods };
     if (tab === 'minicut') tab = 'planif'; // el Mini cut ahora vive dentro de «Planificación»
     if (!views[tab]) tab = 'req';
-    const a = A(), segLabel = '';
+    const a = A(), segLabel = tab === 'menu' && a.ui.menuView === 'recetas' ? 'Recetario' : '';
     return `<div class="plan-layout ${sbCollapsed ? 'sb-collapsed' : ''}">
       ${sidebar(tab)}
       <div class="plan-main" id="plan-main">
@@ -1914,7 +1916,8 @@
     const initials = (a.q.nombre || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('');
     const sub = (k) => {
       if ((k === 'menu' || k === 'dist') && k === tab) {
-        return `<div class="sb-sub" role="group" aria-label="Tipos de día">${a.dayTypes.map((d) => `<button class="sb-subitem ${d.id === cur.id ? 'active' : ''}" data-action="sbDay" data-id="${d.id}" data-t="${k}" ${d.id === cur.id ? 'aria-current="true"' : ''}><span class="sw" style="background:${d.color}"></span><span class="sb-text">${esc(d.name)}</span></button>`).join('')}</div>`;
+        const rec = k === 'menu' && a.ui.menuView === 'recetas';
+        return `<div class="sb-sub" role="group" aria-label="Tipos de día">${a.dayTypes.map((d) => `<button class="sb-subitem ${d.id === cur.id && !rec ? 'active' : ''}" data-action="sbDay" data-id="${d.id}" data-t="${k}" ${d.id === cur.id ? 'aria-current="true"' : ''}><span class="sw" style="background:${d.color}"></span><span class="sb-text">${esc(d.name)}</span></button>`).join('')}${k === 'menu' ? `<button class="sb-subitem ${rec ? 'active' : ''}" data-action="menuView" data-v="recetas" ${rec ? 'aria-current="true"' : ''}><span class="sb-ic-sm">${ic('book', 13)}</span><span class="sb-text">Recetario</span></button>` : ''}</div>`;
       }
       if (k === 'seg' && tab === 'seg') {
         return `<div class="sb-sub" role="group" aria-label="Vistas de seguimiento">${SEG_TABS.map(([v, l]) => `<button class="sb-subitem ${v === segTab ? 'active' : ''}" data-action="trackTab" data-v="${v}" ${v === segTab ? 'aria-current="true"' : ''}><span class="sb-text">${l}</span></button>`).join('')}</div>`;
@@ -1940,15 +1943,17 @@
     <div class="sb-backdrop" data-action="closeDrawer" aria-hidden="true"></div>`;
   }
 
-  function daySeg(a, extra = '') {
-    const cur = activeDay(a);
+  // withRec: agrega «Recetario» junto a los tipos de día (solo en Menú diario).
+  function daySeg(a, extra = '', withRec = false) {
+    const cur = activeDay(a), rec = withRec && a.ui.menuView === 'recetas';
     return `<div class="daytype-head no-print">
-      <div class="seg">${a.dayTypes.map((d) => `<button class="${d.id === cur.id ? 'active' : ''}" data-action="setDay" data-id="${d.id}"><span class="sw" style="background:${d.color}"></span>${esc(d.name)}</button>`).join('')}</div>
-      <button class="btn sm ghost" data-action="addDayType">${ic('plus', 14)} Tipo de día</button>
+      <div class="seg">${a.dayTypes.map((d) => `<button class="${d.id === cur.id && !rec ? 'active' : ''}" data-action="setDay" data-id="${d.id}"><span class="sw" style="background:${d.color}"></span>${esc(d.name)}</button>`).join('')}</div>
+      ${withRec ? `<div class="seg"><button class="${rec ? 'active' : ''}" data-action="menuView" data-v="recetas" title="Recetas guardadas, por tiempo de comida">${ic('book', 14)} Recetario <span class="seg-n">${recipesOf().length}</span></button></div>` : ''}
+      ${rec ? '' : `<button class="btn sm ghost" data-action="addDayType">${ic('plus', 14)} Tipo de día</button>
       <button class="btn sm ghost" data-action="editDayType" data-id="${cur.id}" title="Renombrar / color">${ic('edit', 14)}</button>
       <button class="btn sm ghost" data-action="dupDayType" data-id="${cur.id}" title="Duplicar tipo de día">${ic('copy', 14)}</button>
-      ${a.dayTypes.length > 1 ? `<button class="btn sm ghost danger" data-action="delDayType" data-id="${cur.id}" title="Eliminar tipo de día">${ic('trash', 14)}</button>` : ''}
-      <span class="spacer"></span>${extra}
+      ${a.dayTypes.length > 1 ? `<button class="btn sm ghost danger" data-action="delDayType" data-id="${cur.id}" title="Eliminar tipo de día">${ic('trash', 14)}</button>` : ''}`}
+      <span class="spacer"></span>${rec ? '' : extra}
     </div>`;
   }
   function activeDay(a) { return a.dayTypes.find((d) => d.id === a.activeDay) || a.dayTypes[0]; }
@@ -2263,6 +2268,7 @@
     </section>`;
   }
   function viewMenu() {
+    if (A().ui.menuView === 'recetas') return `${daySeg(A(), '', true)}${viewRecetario(A())}`;
     const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
     const SHORT = { Kcal: 'Kcal', 'Proteínas': 'P', Carbohidratos: 'C', Grasas: 'G' };
     const sumItem = (l, v, tv, u, cls) => { const p = adq(v, tv); return `<div class="sum-item"><div class="si-top"><span class="si-l"><span class="si-full">${l}</span><span class="si-short">${SHORT[l] || l}</span></span><span class="adq ${adqCls(p)}">${p != null ? fmt(p) + '%' : ''}</span></div>
@@ -2270,7 +2276,7 @@
     return `${feedCalendar(a)}
     ${daySeg(a, `${dt.meals.length && dt.meals.every((m) => collapsed.has(m.id))
       ? `<button class="btn sm ghost" data-action="expandAll">${ic('arrowDown', 14)} Expandir todas</button>`
-      : `<button class="btn sm ghost" data-action="collapseAll">${ic('arrowUp', 14)} Contraer todas</button>`}`)}
+      : `<button class="btn sm ghost" data-action="collapseAll">${ic('arrowUp', 14)} Contraer todas</button>`}`, true)}
     ${reqMissing(a, dt)}
     <div class="menu-sticky">
     <section class="card day-summary" aria-label="Total diario">
@@ -2338,6 +2344,7 @@
         <span class="spacer"></span>
         ${oi !== m.sel ? `<button class="btn xs" data-action="setMain" data-m="${mi}" data-k="${oi}">★ Usar en el total del día</button>` : '<span class="small muted">★ Cuenta en el total del día</span>'}
         <button class="btn xs" data-action="copyTo" data-m="${mi}" data-k="${oi}" title="Copiar esta opción o la comida completa a otro tipo de día">${ic('send', 13)} Copiar a otro día</button>
+        ${(() => { const inRec = recipesOf().some((r) => r.srcOpt === o.id); return `<button class="btn xs${inRec ? ' in-rec' : ''}" data-action="saveRecipe" data-m="${mi}" data-k="${oi}" title="${inRec ? 'Esta opción ya está en el recetario: vuelve a guardarla para actualizar la receta' : 'Guardar esta opción como receta en el recetario'}">${ic(inRec ? 'check' : 'book', 13)} ${inRec ? 'En el recetario' : 'Guardar en recetario'}</button>`; })()}
         <button class="btn xs ghost ${clip && clip.kind === 'opt' && clip.srcId === o.id ? 'copied' : ''}" data-action="copyOpt" data-m="${mi}" data-k="${oi}" title="Copiar esta opción para pegarla en otra comida">${ic('copy', 13)} ${clip && clip.kind === 'opt' && clip.srcId === o.id ? 'Copiada' : 'Copiar'}</button>
         ${m.options.length > 1 ? `<button class="btn xs ghost danger" data-action="delOpt" data-m="${mi}" data-k="${oi}" title="Eliminar opción">${ic('trash', 13)}</button>` : ''}
       </div>
@@ -2362,6 +2369,66 @@
       </div>
       </div>
     </section>`;
+  }
+
+  // ---------------- Recetario (Plan › Menú diario › Recetario) ----------------
+  // Recetas guardadas desde las opciones del menú («Guardar en recetario»), agrupadas por tiempo de comida.
+  // El recetario es del coach (S.recipes): sirve para todos los atletas. Cada receta guarda una copia de la opción
+  // (nombre, imagen, alimentos y notas) y se agrega como opción nueva en cualquier comida de cualquier tipo de día.
+  const recipesOf = () => (Array.isArray(S.recipes) ? S.recipes : (S.recipes = []));
+  const recCat = (r) => String(r.cat || '').trim() || 'Sin tiempo de comida';
+  const normTxt = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  // Tiempos de comida conocidos: los de las comidas del atleta (en el orden de sus tipos de día) y los de las recetas.
+  function recipeCatList(a) {
+    const out = [], add = (n) => { n = String(n || '').trim(); if (n && !out.some((x) => normTxt(x) === normTxt(n))) out.push(n); };
+    (a.dayTypes || []).forEach((dt) => dt.meals.forEach((m) => add(m.name)));
+    recipesOf().forEach((r) => add(r.cat));
+    return out;
+  }
+  // Grupos del recetario: en el orden de las comidas del atleta; los demás, alfabéticos; al final, «Sin tiempo de comida».
+  function recipeGroups(a, list) {
+    const order = recipeCatList(a), g = new Map();
+    list.forEach((r) => { const c = recCat(r), key = normTxt(c); if (!g.has(key)) g.set(key, { name: c, items: [] }); g.get(key).items.push(r); });
+    const idx = (x) => { const i = order.findIndex((o) => normTxt(o) === normTxt(x.name)); return x.name === 'Sin tiempo de comida' ? 1e6 : i < 0 ? 1e3 : i; };
+    return [...g.values()].sort((x, y) => idx(x) - idx(y) || x.name.localeCompare(y.name, 'es'));
+  }
+  function viewRecetario(a) {
+    const all = recipesOf();
+    if (!all.length) return `<div class="card empty mt16"><div class="e-ic">${ic('book', 30)}</div><h2>El recetario está vacío</h2>
+      <p>Arma una comida en el menú de un tipo de día y, en esa opción, pulsa <b>«Guardar en recetario»</b>. Quedará aquí, ordenada por tiempo de comida, lista para agregarla en cualquier comida de cualquier tipo de día (también de otros atletas).</p>
+      <div class="row mt16" style="justify-content:center"><button class="btn primary" data-action="menuView" data-v="dia">${ic('menu', 14)} Ir a las comidas</button></div></div>`;
+    const q = normTxt(String(T.recipeQ || '').trim()), cf = T.recipeCat || '';
+    const groupsAll = recipeGroups(a, all);
+    const hit = (r) => (!cf || normTxt(recCat(r)) === cf) && (!q || normTxt([r.name, r.cat, r.notes, ...(r.foods || []).map((l) => (foodById(l.foodId) || {}).name || l.foodName || '')].join(' ')).includes(q));
+    const shown = all.filter(hit), groups = recipeGroups(a, shown);
+    const card = (r) => {
+      const t = optTotals(r), foods = (r.foods || []).filter((l) => l.foodId || String(l.foodName || '').trim());
+      const fl = foods.slice(0, 6).map((l) => { const f = foodById(l.foodId), nm = f ? f.name : l.foodName, qty = String(l.cantidad || '').trim() || (num(l.porciones) ? `${fmt(num(l.porciones), 1)} ${num(l.porciones) === 1 ? 'porción' : 'porciones'}` : '');
+        return `<li>${esc(nm)}${qty ? ` <span class="muted">· ${esc(qty)}</span>` : ''}</li>`; }).join('');
+      return `<article class="card rec-card">
+        ${r.image ? `<img class="rec-img" src="${imgSrc(r.image)}" alt="${esc(r.name || 'Receta')}">` : `<div class="rec-img rec-noimg" aria-hidden="true">${ic('book', 24)}</div>`}
+        <div class="rec-body">
+          <div class="rec-name">${esc(r.name || 'Sin nombre')}</div>
+          <div class="rec-mac"><span class="kc"><b>${fmt(t.kcal)}</b> kcal</span><span><span class="kp">P ${fmt(t.p)}</span> · <span class="kcarb">C ${fmt(t.c)}</span> · <span class="kg">G ${fmt(t.g)}</span></span></div>
+          ${fl ? `<ul class="rec-foods">${fl}${foods.length > 6 ? `<li class="muted">y ${foods.length - 6} más…</li>` : ''}</ul>` : '<div class="muted small">Sin alimentos.</div>'}
+          ${String(r.notes || '').trim() ? `<div class="rec-notes">${esc(String(r.notes).trim().slice(0, 180))}${String(r.notes).trim().length > 180 ? '…' : ''}</div>` : ''}
+        </div>
+        <div class="rec-actions">
+          <button class="btn sm primary" data-action="recipeToMeal" data-id="${r.id}">${ic('plus', 14)} Agregar a una comida</button>
+          <button class="btn sm ghost" data-action="editRecipe" data-id="${r.id}" title="Cambiar nombre, tiempo de comida o notas">${ic('edit', 14)} Editar</button>
+          <button class="btn sm ghost icon danger" data-action="delRecipe" data-id="${r.id}" title="Eliminar del recetario" aria-label="Eliminar ${esc(r.name || 'receta')} del recetario">${ic('trash', 14)}</button>
+        </div></article>`;
+    };
+    return `<div class="rec-head mt16">
+        <div class="muted small">${all.length} ${all.length === 1 ? 'receta' : 'recetas'} en ${groupsAll.length} ${groupsAll.length === 1 ? 'tiempo de comida' : 'tiempos de comida'}. Es tu recetario: sirve para todos tus atletas. Al agregar una receta a una comida queda como opción nueva e independiente.</div>
+        <div class="rec-filters">
+          ${I('#recipeQ', { live: true, ph: 'Buscar por nombre, alimento o nota…', attrs: 'aria-label="Buscar en el recetario"' })}
+          ${SEL('#recipeCat', [['', 'Todos los tiempos de comida'], ...groupsAll.map((g) => [normTxt(g.name), `${g.name} (${g.items.length})`])], { attrs: 'aria-label="Tiempo de comida"' })}
+        </div>
+      </div>
+      ${groups.length ? groups.map((g) => `<section class="rec-group mt16"><div class="rec-group-head"><h3>${esc(g.name)}</h3><span class="sub">${g.items.length} ${g.items.length === 1 ? 'receta' : 'recetas'}</span></div>
+        <div class="rec-grid">${g.items.map(card).join('')}</div></section>`).join('')
+        : '<div class="card mt16"><div class="card-body muted center">Ninguna receta coincide con la búsqueda.</div></div>'}`;
   }
 
   // ---------------- Seguimiento ----------------
@@ -3992,7 +4059,8 @@
       toast('Datos copiados desde el cuestionario.'); commit();
     },
 
-    setDay(el) { A().activeDay = el.dataset.id; commit(); },
+    setDay(el) { A().activeDay = el.dataset.id; A().ui.menuView = 'dia'; commit(); },
+    menuView(el) { A().ui.menuView = el.dataset.v === 'recetas' ? 'recetas' : 'dia'; save(); go('plan/menu'); },
     // Calendario de alimentación (Menú diario)
     fcMonth(el) { T.fcMonth = fcShift(fcMonth(), +el.dataset.d || 0); render(); },
     fcToday() { T.fcMonth = null; render(); },
@@ -4087,6 +4155,65 @@
         copyCtx = null; closeModal(); commit();
         toast(`Copiado a ${dest.name} · ${target.name}${mid === '__new' ? '. Ajusta sus porcentajes en Distribución.' : ''}`);
       }, 'Copiar');
+    },
+    // ---- Recetario ----
+    // Guarda la opción visible de una comida como receta (o actualiza la receta que salió de esa opción).
+    saveRecipe(el) {
+      const a = A(), m = getP(el.dataset.m), o = m && m.options[+el.dataset.k]; if (!o) return;
+      if (!String(o.title || '').trim() && !(o.foods || []).length) { toast('La opción está vacía: ponle nombre o agrega alimentos antes de guardarla.'); return; }
+      const ex = recipesOf().find((r) => r.srcOpt === o.id), cats = recipeCatList(a);
+      promptModal('Guardar en el recetario', `
+        <div class="callout small">El recetario es tuyo: la receta queda disponible para todos tus atletas, en cualquier comida de cualquier tipo de día. Se guarda una copia (nombre, imagen, alimentos y notas): si después cambias esta opción, la receta no cambia hasta que la guardes de nuevo.</div>
+        ${ex ? F('Esta opción ya está en el recetario', `<select class="select" id="r-mode"><option value="upd">Actualizar «${esc(ex.name)}»</option><option value="new">Guardarla como receta nueva</option></select>`) : ''}
+        ${F('Nombre de la receta', `<input class="input" id="r-name" value="${esc(String(o.title || '').trim())}" placeholder="Ej.: Avena con yogur, plátano y pan con huevo">`)}
+        ${F('Tiempo de comida', `<input class="input" id="r-cat" list="r-cats" value="${esc(ex ? ex.cat || '' : String(m.name || '').trim())}" placeholder="Ej.: Desayuno"><datalist id="r-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`, 'El recetario agrupa las recetas por tiempo de comida.')}`, () => {
+        const name = $('#r-name').value.trim() || String(o.title || '').trim() || String(m.name || '').trim() || 'Receta', cat = $('#r-cat').value.trim();
+        const data = { name, cat, image: o.image || null, foods: clone(o.foods || []), notes: o.notes || '', srcOpt: o.id, updatedAt: todayISO() };
+        const upd = ex && $('#r-mode') && $('#r-mode').value === 'upd';
+        if (upd) Object.assign(ex, data); else recipesOf().push(Object.assign({ id: uid(), createdAt: todayISO() }, data));
+        closeModal(); commit(); toast(`«${name}» ${upd ? 'actualizada' : 'guardada'} en el recetario${cat ? ` · ${cat}` : ''}.`);
+      }, 'Guardar');
+    },
+    // Agrega una receta como opción nueva en la comida que se elija, de cualquier tipo de día del atleta activo.
+    recipeToMeal(el) {
+      const a = A(), r = recipesOf().find((x) => x.id === el.dataset.id); if (!r) return;
+      const nm = String(r.cat || '').trim() || 'Comida', key = normTxt(nm);
+      const def = a.dayTypes.find((d) => d.id === a.activeDay && d.meals.some((m) => normTxt(m.name) === key)) || a.dayTypes.find((d) => d.meals.some((m) => normTxt(m.name) === key)) || activeDay(a);
+      copyCtx = { src: { name: nm } }; // para recargar las comidas al cambiar el tipo de día
+      promptModal(`Agregar «${esc(r.name)}» a una comida`, `
+        ${F('Tipo de día', `<select class="select" id="m-day">${a.dayTypes.map((d) => `<option value="${d.id}" ${d.id === def.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select>`)}
+        ${F('Tiempo de comida', `<select class="select" id="m-meal">${mealOptions(def, nm)}</select>`, 'Se agrega como opción nueva de esa comida (si la comida está vacía, ocupa su lugar). La copia es independiente de la receta.')}
+        <label class="chk-line"><input type="checkbox" id="m-main"> Usarla como opción principal (★, la que cuenta en el total del día)</label>`, () => {
+        const dest = a.dayTypes.find((d) => d.id === $('#m-day').value), mid = $('#m-meal').value;
+        const o = { id: uid(), title: r.name || '', image: r.image || null, foods: clone(r.foods || []), notes: r.notes || '', recipeId: r.id };
+        let target, k = 0;
+        if (mid === '__new') { target = Object.assign(newMeal(nm, '', 0), { options: [o], sel: 0, active: 0 }); dest.meals.push(target); }
+        else {
+          target = dest.meals.find((m) => m.id === mid);
+          const o0 = target.options[0], empty = target.options.length === 1 && !o0.title && !o0.image && !o0.foods.length && !o0.notes;
+          if (empty) { target.options = [o]; target.sel = 0; } else { target.options.push(o); k = target.options.length - 1; }
+          collapsed.delete(target.id); saveCollapsed();
+        }
+        target.active = k; if ($('#m-main').checked) target.sel = k;
+        copyCtx = null; closeModal(); commit();
+        toast(`«${r.name}» agregada a ${dest.name} · ${target.name} (opción ${dest.meals.indexOf(target) + 1}.${k + 1})${mid === '__new' ? '. Ajusta sus porcentajes en Distribución.' : '.'}`);
+      }, 'Agregar');
+    },
+    editRecipe(el) {
+      const a = A(), r = recipesOf().find((x) => x.id === el.dataset.id); if (!r) return;
+      promptModal('Editar receta', `
+        ${F('Nombre de la receta', `<input class="input" id="r-name" value="${esc(r.name || '')}">`)}
+        ${F('Tiempo de comida', `<input class="input" id="r-cat" list="r-cats" value="${esc(r.cat || '')}" placeholder="Ej.: Desayuno"><datalist id="r-cats">${recipeCatList(a).map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`)}
+        ${F('Notas', `<textarea class="textarea" id="r-notes" rows="4" placeholder="Preparación, reemplazos, indicaciones…">${esc(r.notes || '')}</textarea>`, 'Para cambiar los alimentos: agrégala a una comida, ajústala ahí y vuelve a guardarla en el recetario.')}`, () => {
+        r.name = $('#r-name').value.trim() || r.name; r.cat = $('#r-cat').value.trim(); r.notes = $('#r-notes').value; r.updatedAt = todayISO();
+        closeModal(); commit(); toast('Receta actualizada.');
+      });
+    },
+    delRecipe(el) {
+      const r = recipesOf().find((x) => x.id === el.dataset.id); if (!r) return;
+      confirmModal('Eliminar receta', `Se eliminará <b>${esc(r.name || 'la receta')}</b> del recetario. Las comidas donde ya la agregaste no cambian.`, () => {
+        S.recipes = recipesOf().filter((x) => x !== r); closeModal(); commit();
+      });
     },
     // Objetivos de la etapa (pestaña Planificación)
     // Copia en la etapa lo que la calculadora (Plan › Requerimientos) da en este momento para cada tipo de día.
@@ -4255,7 +4382,7 @@
         render();
       }, 'Quitar acceso');
     },
-    sbDay(el) { A().activeDay = el.dataset.id; save(); go('plan/' + el.dataset.t); },
+    sbDay(el) { A().activeDay = el.dataset.id; A().ui.menuView = 'dia'; save(); go('plan/' + el.dataset.t); },
     toggleSidebar() { sbCollapsed = !sbCollapsed; lsSet('prepcoach-sb', sbCollapsed ? '1' : '0'); render(); },
     openDrawer() { openDrawer(); },
     closeDrawer() { closeDrawer(); },
@@ -4502,6 +4629,7 @@
   // Completa campos que falten en datos antiguos o importados.
   function migrate(s) {
     s.foods = s.foods || newState().foods; s.athletes = (s.athletes || []).map(migrateAthlete);
+    s.recipes = Array.isArray(s.recipes) ? s.recipes : []; // recetario (antes no existía)
     s.pg = s.pg && typeof s.pg === 'object' ? s.pg : { clients: [] }; // Población general: datos propios, sin relación con los atletas
     if (!s.athletes.find((a) => a.id === s.activeId)) s.activeId = s.athletes[0]?.id || null;
     return s;
