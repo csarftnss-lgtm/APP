@@ -188,7 +188,7 @@
       req: { nacimiento: '', edad: '', sexo: '', peso: '', altura: '', grasa: '', factor: 1.55, ecuacion: 'mifflin', tmbManual: null, objetivo: 'deficit', pctDef: 0.5, pctVol: 0.3, volUnit: 'mes', pctMant: 0, kcalKg: 7000, pasos: null, sumarPasos: false },
       dayTypes: dts, activeDay: dts[0].id,
       tracking: { config: { inicio: mondayOf(todayISO()), semanas: 11, pesoInicial: null, etapa: 'Pérdida de grasa', obj1: -1, cambio: 5, obj2: -0.5, tol: 0.25, metaPasos: 10000, reqsSeeded: true, signedObj: true, weeksByDate: true, rangos: true, stages: defaultStages(mondayOf(todayISO())) }, weeks: {}, daily: {} },
-      ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd', menuView: 'dia' }, // menuView: 'dia' (comidas del tipo de día) o 'recetas' (recetario) // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
+      ui: { trackTab: 'panel', panelWeek: null, panelStage: null, chartMetric: 'abd', menuView: 'dia', docOff: [] }, // docOff: apartados que no se imprimen en «Descargar planificación» // menuView: 'dia' (comidas del tipo de día) o 'recetas' (recetario) // panelStage: id de la etapa que se consulta en el panel (null = la vigente)
       calendar: {}, // calendario de alimentación: { 'aaaa-mm-dd': id del tipo de día }
       portal: newPortal(),
     };
@@ -3343,13 +3343,15 @@
   // ---------------- Minuta: vista previa y descarga ----------------
   // Pestaña propia bajo «Menú diario»: muestra tal cual lo que saldrá en el archivo o la impresión del tipo de día elegido.
   function viewMinuta() {
-    const a = A(), dl = MODE === 'sync';
+    const a = A(), dl = MODE === 'sync', parts = docParts(a), nOn = parts.filter(([k]) => docOn(a, k)).length;
     return `
     <div class="daytype-head no-print">
-      <ol class="mn-order" aria-label="Contenido del archivo, en orden"><li>Planificación</li><li>Calendario de alimentación</li><li>Minuta ejemplo de cada tipo de día</li><li>Distribución de las comidas</li><li>Resumen del seguimiento semanal</li></ol>
+      <div class="mn-picks" role="group" aria-label="Apartados que se imprimen"><span class="label mn-picks-l">Imprimir:</span>${parts.map(([k, l]) => `<label class="chip${docOn(a, k) ? '' : ' off'}"><input type="checkbox" data-action="docPart" data-k="${esc(k)}" ${docOn(a, k) ? 'checked' : ''}><span class="box"></span>${esc(l)}</label>`).join('')}</div>
       <span class="spacer"></span>
-      <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
+      <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy && nOn ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
+    <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
+      ${nOn < parts.length ? '<button class="btn xs ghost" data-action="docAll" data-v="1">Marcar todos</button>' : '<button class="btn xs ghost" data-action="docAll" data-v="0">Desmarcar todos</button>'}</div>
     <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos.</p>
     <div class="mn-stage"><div class="mn-sheets" id="minuta-preview" role="document" aria-label="Vista previa de la planificación">${planDocBody(a, (v) => imgSrc(v), true)}</div></div>`;
   }
@@ -3494,6 +3496,20 @@
         return Object.assign(x, { range: stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas', meta });
       });
   }
+  // ---- Apartados del documento: el coach elige cuáles se imprimen (a.ui.docOff = claves que no van) ----
+  // Cada minuta (una por tipo de día) es un apartado propio; en el documento van juntas bajo «Minuta ejemplo».
+  const DOC_SECS = [['planif', 'Planificación'], ['cal', 'Calendario de alimentación'], ['min', 'Minuta ejemplo'], ['dist', 'Distribución de las comidas'], ['seg', 'Resumen del seguimiento semanal']];
+  const docOff = (a) => (Array.isArray(a.ui.docOff) ? a.ui.docOff : (a.ui.docOff = []));
+  const docOn = (a, k) => !docOff(a).includes(k);
+  function docParts(a) {
+    return DOC_SECS.flatMap(([k, l]) => (k === 'min' ? a.dayTypes.map((dt) => [`min:${dt.id}`, `Minuta · ${dt.name}`]) : [[k, l]]));
+  }
+  const docMinDays = (a) => a.dayTypes.filter((dt) => docOn(a, `min:${dt.id}`));
+  // Secciones que se imprimen, en orden y numeradas de nuevo (1, 2, 3…): { key, title, n }.
+  function docSecs(a) {
+    let n = 0;
+    return DOC_SECS.filter(([k]) => (k === 'min' ? docMinDays(a).length > 0 : docOn(a, k))).map(([key, title]) => ({ key, title, n: ++n }));
+  }
   function planDocBody(a, imgOf, sheets = false) {
     const nl = (s) => esc(s).replace(/\n/g, '<br>');
     // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
@@ -3510,7 +3526,7 @@
         ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = planType(a, d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
       : '<p class="pd-empty">Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.</p>';
     // 3 · Minuta ejemplo de cada tipo de día
-    const minutas = a.dayTypes.map((dt, i) => {
+    const minutas = docMinDays(a).map((dt, i) => {
       const pm = minutaMeals(dt);
       return `<div class="pd-day${i ? ' pd-break' : ''}">${pm.length
         ? minutaBody(a, dt, pm, imgOf, { eyebrow: 'Minuta ejemplo', title: dt.name })
@@ -3547,27 +3563,36 @@
       <p class="pd-foot">Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
       : '<p class="pd-empty">Aún no hay registros de seguimiento.</p>';
     const sec = (n, title, html, brk = true) => `<section class="pd-sec${brk ? ' pd-break' : ''}"><div class="pd-sec-title"><span>${n}</span>${title}</div>${html}</section>`;
+    const cover = `<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
+        <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>`;
+    const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n;
     if (sheets) {
-      // Vista previa hoja por hoja: vertical para Planificación, Distribución y Seguimiento; horizontal para cada minuta.
-      const sheet = (html) => `<div class="mn-paper mn-sheet">${html}</div>`;
-      const land = a.dayTypes.map((dt, i) => {
-        const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
-        const head = `${i ? '' : '<div class="pd-sec-title"><span>3</span>Minuta ejemplo</div>'}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
+      // Vista previa hoja por hoja (vertical para Planificación, Calendario, Distribución y Seguimiento; horizontal para cada minuta).
+      // Se ven todos los apartados; cada uno lleva su casilla «Imprimir». Los que no se imprimen quedan atenuados y sin número,
+      // y la portada va en la primera hoja que sí se imprime, igual que en el PDF.
+      const parts = docParts(a), first = (parts.find(([k]) => docOn(a, k)) || parts[0])[0];
+      const N = (k) => num(k) || '–';
+      const pick = (k, label) => { const on = docOn(a, k);
+        return `<label class="mn-pick no-print${on ? '' : ' off'}"><input type="checkbox" data-action="docPart" data-k="${esc(k)}" ${on ? 'checked' : ''} aria-label="Imprimir ${esc(label)}"><span class="box" aria-hidden="true"></span><b>${on ? 'Se imprime' : 'No se imprime'}</b><span class="mn-pick-l">${esc(label)}</span></label>`; };
+      const part = (k, label, inner) => `<div class="mn-part${docOn(a, k) ? '' : ' is-off'}" data-part="${esc(k)}">${pick(k, label)}${inner}</div>`;
+      const sheet = (k, html) => `<div class="mn-paper mn-sheet">${k === first ? cover : ''}${html}</div>`;
+      const minHead = (docMinDays(a)[0] || a.dayTypes[0] || {}).id;
+      const land = a.dayTypes.map((dt) => {
+        const k = `min:${dt.id}`, pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
+        const head = `${k === first ? cover : ''}${dt.id === minHead ? `<div class="pd-sec-title"><span>${N('min')}</span>Minuta ejemplo</div>` : ''}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
           ${pm.length ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
         const body = pm.length ? minutaGridHTML(dt, pm, imgOf) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
-        return `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`;
+        return part(k, `Minuta · ${dt.name}`, `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`);
       }).join('');
-      return sheet(`<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
-        <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>${sec(1, 'Planificación', planif, false)}`) + sheet(sec(2, 'Calendario de alimentación', calHtml, false))
-        + land + sheet(sec(4, 'Distribución de las comidas', dist + notes, false)) + sheet(sec(5, 'Resumen del seguimiento semanal', seg, false));
+      return part('planif', 'Planificación', sheet('planif', sec(N('planif'), 'Planificación', planif, false)))
+        + part('cal', 'Calendario de alimentación', sheet('cal', sec(N('cal'), 'Calendario de alimentación', calHtml, false)))
+        + land
+        + part('dist', 'Distribución de las comidas', sheet('dist', sec(N('dist'), 'Distribución de las comidas', dist + notes, false)))
+        + part('seg', 'Resumen del seguimiento semanal', sheet('seg', sec(N('seg'), 'Resumen del seguimiento semanal', seg, false)));
     }
-    return `<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
-        <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>
-      ${sec(1, 'Planificación', planif, false)}
-      ${sec(2, 'Calendario de alimentación', calHtml)}
-      ${sec(3, 'Minuta ejemplo', minutas)}
-      ${sec(4, 'Distribución de las comidas', dist + notes)}
-      ${sec(5, 'Resumen del seguimiento semanal', seg)}`;
+    // Documento para imprimir (respaldo en HTML si no se puede generar el PDF): solo los apartados marcados.
+    const html = { planif, cal: calHtml, min: minutas, dist: dist + notes, seg };
+    return cover + secs.map((x, i) => sec(x.n, x.title, html[x.key], i > 0)).join('');
   }
   // Minuta horizontal en HTML para la vista previa: misma estructura que el PDF (fila por comida, columna por opción).
   function minutaGridHTML(dt, pm, imgOf) {
@@ -3779,10 +3804,13 @@
       }
     } else calPdf.push(empty('Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'));
 
-    // 3 · Minuta ejemplo de cada tipo de día
-    const minutas = [];
-    for (let di = 0; di < a.dayTypes.length; di++) {
-      const dt = a.dayTypes[di];
+    // Apartados que se imprimen (marcados en la vista previa), numerados de nuevo; la portada va con el primero.
+    const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n, minFirst = secs.length && secs[0].key === 'min';
+    const coverNodes = () => [{ columns: [{ width: '*', stack: [{ text: 'PLANIFICACIÓN NUTRICIONAL', style: 'eyebrow' }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] }, { width: 'auto', text: `Generada el ${fmtDate(todayISO())}\n${a.dayTypes.map((d) => str(d.name)).join(' · ')}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 }, rule(2, '#111', 6, 0)];
+    // 3 · Minuta ejemplo de cada tipo de día (solo las marcadas)
+    const minutas = [], minDays = docMinDays(a);
+    for (let di = 0; di < minDays.length; di++) {
+      const dt = minDays[di];
       const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
       const hd = dayHead('Minuta ejemplo', dt.name, pm.length ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
       // Cada minuta ocupa su propia hoja horizontal (la primera comparte hoja con el título de la sección).
@@ -3792,7 +3820,7 @@
       if (!pm.length) { minutas.push(empty('Este tipo de día aún no tiene opciones con alimentos en el Menú diario.')); continue; }
       const data = minutaGridData(kit, pm, imgOf);
       // Para medir, la hoja se arma igual que en el documento (la primera minuta lleva además el título de la sección).
-      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(3, 'Minuta ejemplo', true); delete st.pageBreak; return [st].concat(h); };
+      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(num('min'), 'Minuta ejemplo', true); delete st.pageBreak; return (minFirst ? coverNodes() : []).concat([st], h); };
       const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => testHead().concat(pdfMinutaGrid(kit, dt, data, f, h)));
       minutas.push(...pdfMinutaGrid(kit, dt, data, fs, ih));
     }
@@ -3830,14 +3858,12 @@
       { text: 'Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
     ] : [empty('Aún no hay registros de seguimiento.')];
 
-    return pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, [].concat(
-        [{ columns: [{ width: '*', stack: [{ text: 'PLANIFICACIÓN NUTRICIONAL', style: 'eyebrow' }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] }, { width: 'auto', text: `Generada el ${fmtDate(todayISO())}\n${a.dayTypes.map((d) => str(d.name)).join(' · ')}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 }, rule(2, '#111', 6, 0)],
-        [secTitle(1, 'Planificación', false)], planif,
-        [secTitle(2, 'Calendario de alimentación', true)], calPdf,
-        [Object.assign(secTitle(3, 'Minuta ejemplo', true), { pageOrientation: 'landscape' })], minutas,
-        [Object.assign(secTitle(4, 'Distribución de las comidas', true), { pageOrientation: 'portrait' })], dist,
-        [secTitle(5, 'Resumen del seguimiento semanal', true)], seg
-    ));
+    // Cada apartado parte en hoja nueva (salvo el primero, que va con la portada): horizontal la minuta, vertical los demás.
+    const nodes = { planif, cal: calPdf, min: minutas, dist, seg }, content = coverNodes();
+    secs.forEach((x, i) => { const st = secTitle(x.n, x.title, i > 0); if (i > 0) st.pageOrientation = x.key === 'min' ? 'landscape' : 'portrait'; content.push(st, ...nodes[x.key]); });
+    const doc = pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, content);
+    if (minFirst) doc.pageOrientation = 'landscape';
+    return doc;
   }
   // Genera un PDF y lo entrega. Si no se puede generar (sin conexión o generador bloqueado), entrega la versión HTML con fallback().
   async function savePdf({ base, images, build, okMsg, failMsg, fallback }) {
@@ -3867,7 +3893,8 @@
   const htmlImages = async (images) => { const m = new Map(); for (const v of images) if (v && !m.has(v)) m.set(v, MODE === 'sync' ? await inlineImage(v) : imgSrc(v)); return m; };
   async function printPlan() {
     const a = A(), base = `planificacion-${slug(a.q.nombre || 'atleta')}`;
-    const images = a.dayTypes.flatMap((dt) => minutaMeals(dt).flatMap(({ opts }) => opts.map((o) => o.image))).filter(Boolean);
+    if (!docSecs(a).length) { toast('Marca al menos un apartado para descargar la planificación.'); return; }
+    const images = docMinDays(a).flatMap((dt) => minutaMeals(dt).flatMap(({ opts }) => opts.map((o) => o.image))).filter(Boolean);
     await savePdf({ base, images, build: (imgOf) => planPdfDef(a, imgOf), okMsg: 'Planificación descargada en PDF.', failMsg: 'No se pudo descargar la planificación.',
       fallback: async () => { const imgs = await htmlImages(images); await deliverDoc({ body: planDocBody(a, (v) => imgs.get(v)), title: `Planificación · ${a.q.nombre || ''}`, fname: `${base}.html`, what: 'Planificación descargada', fail: 'No se pudo descargar la planificación.' }); } });
   }
@@ -4342,6 +4369,13 @@
     clearImage(el) { setP(el.dataset.p, null); commit(); },
     printMenu() { printMenu(); },
     printPlan() { printPlan(); },
+    // Apartados que se imprimen: la casilla de cada apartado (en la lista de arriba o sobre su hoja en la vista previa).
+    docPart(el) {
+      const a = A(), off = docOff(a), k = el.dataset.k;
+      a.ui.docOff = off.includes(k) ? off.filter((x) => x !== k) : off.concat(k);
+      save(); render();
+    },
+    docAll(el) { const a = A(); a.ui.docOff = el.dataset.v === '1' ? [] : docParts(a).map(([k]) => k); save(); render(); },
 
     trackTab(el) {
       A().ui.trackTab = el.dataset.v; closeDrawer(false);

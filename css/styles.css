@@ -1661,3 +1661,29 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .rec-actions .btn.primary { flex: 1 1 auto; }
 .chk-line { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--text-2); cursor: pointer; }
 @media (max-width: 560px) { .rec-filters { justify-content: stretch; } .rec-filters .select { flex: 1 1 100%; } }
+
+/* Descargar planificación: casilla «Imprimir» en cada apartado de la vista previa */
+.mn-picks { display: flex; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.mn-picks .chip.off { opacity: .6; }
+.mn-pick-sum { gap: 10px; flex-wrap: wrap; margin: -4px 0 12px; }
+.warn-text { color: var(--warn); font-weight: 600; }
+.mn-part { display: grid; gap: 8px; }
+.mn-pick { display: inline-flex; align-items: center; gap: 8px; justify-self: start; max-width: 100%; padding: 6px 12px 6px 8px; border-radius: 999px; cursor: pointer; font-size: 13px;
+  border: 1px solid rgb(var(--ok-rgb) / .45); background: rgb(var(--ok-rgb) / .12); color: var(--text); }
+.mn-pick input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.mn-pick .box { width: 16px; height: 16px; flex: none; border-radius: 4px; border: 1.5px solid var(--ok); background: var(--ok); display: inline-grid; place-items: center; }
+.mn-pick .box::after { content: ''; width: 8px; height: 4px; border: 2px solid #fff; border-top: 0; border-right: 0; transform: translate(0, -1px) rotate(-45deg); }
+.mn-pick b { color: var(--ok); font-weight: 700; }
+.mn-pick-l { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mn-pick.off { border-color: var(--border-2); background: var(--surface-2); }
+.mn-pick.off .box { background: transparent; border-color: var(--muted); }
+.mn-pick.off .box::after { display: none; }
+.mn-pick.off b { color: var(--muted); }
+.mn-pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mn-part.is-off > .mn-sheet, .mn-part.is-off > .mn-land-wrap { opacity: .38; filter: grayscale(.85); }
+@media print { .mn-pick, .mn-picks, .mn-pick-sum { display: none !important; } }
+/* Las hojas de la vista previa se ajustan al ancho disponible (en el teléfono no empujan la página hacia los lados) */
+.mn-sheets > *, .mn-part > * { min-width: 0; }
+.mn-picks-l { align-self: center; margin: 0 2px 0 0; }
+.mn-part > .mn-pick { margin-left: max(0px, calc((100% - 820px) / 2)); }
+.mn-part:has(> .mn-land-wrap) > .mn-pick { margin-left: max(0px, calc((100% - 1123px) / 2)); }
