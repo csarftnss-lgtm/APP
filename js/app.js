@@ -201,6 +201,7 @@
       foods: (window.SEED_FOODS || []).map(([name, porcion, gpp, kcal, p, c, g], i) => ({ id: 's' + i, name, porcion, gpp, kcal, p, c, g })),
       athletes: [], activeId: null,
       recipes: [], // recetario del coach (Plan › Menú diario › Recetario): se comparte entre atletas
+      foodsSeedN: (window.SEED_FOODS || []).length, // base inicial completa (ver addSeedFoods)
     };
   }
 
@@ -4626,10 +4627,26 @@
     } catch { toast('El archivo no es un respaldo válido de PrepCoach.'); }
   });
 
+  // Alimentos que se sumaron a la base inicial después de que el coach ya tenía su base (desde la posición 150 de
+  // SEED_FOODS): se agregan una sola vez a la base guardada, salvo que ya exista uno con el mismo nombre o id.
+  // La marca (foodsSeedN) recuerda hasta qué posición se revisó, para no volver a agregar los que el coach borre.
+  const SEED_BASE = 150;
+  function addSeedFoods(s) {
+    const seed = window.SEED_FOODS || [], from = Math.max(SEED_BASE, num(s.foodsSeedN) ?? SEED_BASE);
+    if (from >= seed.length) return;
+    const key = (x) => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+    for (let i = from; i < seed.length; i++) {
+      const [name, porcion, gpp, kcal, p, c, g] = seed[i], id = 's' + i;
+      if (s.foods.some((f) => f.id === id || key(f.name) === key(name))) continue;
+      s.foods.push({ id, name, porcion, gpp, kcal, p, c, g });
+    }
+    s.foodsSeedN = seed.length;
+  }
   // Completa campos que falten en datos antiguos o importados.
   function migrate(s) {
     s.foods = s.foods || newState().foods; s.athletes = (s.athletes || []).map(migrateAthlete);
     s.recipes = Array.isArray(s.recipes) ? s.recipes : []; // recetario (antes no existía)
+    addSeedFoods(s);
     s.pg = s.pg && typeof s.pg === 'object' ? s.pg : { clients: [] }; // Población general: datos propios, sin relación con los atletas
     if (!s.athletes.find((a) => a.id === s.activeId)) s.activeId = s.athletes[0]?.id || null;
     return s;

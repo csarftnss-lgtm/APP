@@ -150,5 +150,11 @@ window.SEED_FOODS = [
   ["Whey protein", "1 scoop", null, 128, 25, 2, 2],
   ["Zapallo", "", 100, 45, 1, 12, 0.1],
   ["Mix de frutos secos (Ej. Piwen)", "1/4 taza", 30, 114, 2.6, 16.5, 4.6],
-  ["Zucaritas", "3/4 taza", 30, 113, 1.2, 26, 0.2]
+  ["Zucaritas", "3/4 taza", 30, 113, 1.2, 26, 0.2],
+  // Agregados desde la minuta de Sebastián (nov. 2026). Porción según la lista de intercambio de frutas del coach;
+  // valores de USDA FoodData Central (naranja cruda y mandarina cruda, por 100 g). Go light: bebida isotónica light
+  // (Zuko Go! Light), descrita como libre de calorías: revisar con la etiqueta.
+  ["Naranja", "1 unidad regular", 120, 56.4, 1.1, 14.1, 0.1],
+  ["Mandarinas", "2 unidades chicas", 180, 95.4, 1.5, 24, 0.6],
+  ["Go light", "1 vaso (preparado)", 200, 0, 0, 0, 0]
 ];
