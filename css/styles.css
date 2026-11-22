@@ -869,10 +869,7 @@ td.mac-sync > span { display: block; }
 .busc-tag.manual { color: var(--warn); background: var(--warn-soft); cursor: pointer; }
 .busc-tag.manual:hover { filter: brightness(1.2); }
 
-/* Inicio con 4 apartados y Población general en blanco */
-.launch-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-@media (max-width: 1400px) { .launch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 760px) { .launch-grid { grid-template-columns: 1fr; } }
+/* Población general en blanco */
 .pg-blank { min-height: 60vh; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--surface); }
 
 /* =====================================================================
@@ -1695,3 +1692,30 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 /* Minuta que no cabe en una hoja horizontal: la vista previa la muestra completa y avisa cuántas hojas ocupa en el PDF */
 .mn-land-wrap[data-pages]::after { content: 'Ocupa ' attr(data-pages) ' hojas en el PDF'; position: absolute; top: 8px; right: 8px; z-index: 2; padding: 3px 9px; border-radius: 999px;
   font: 600 11px/1.4 var(--font); color: #5c4310; background: #fdf1d6; border: 1px solid #e8c77d; }
+
+/* Selección de usuarios tras el inicio de sesión: Atletas y Población general */
+.us-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: start; }
+@media (max-width: 860px) { .us-grid { grid-template-columns: 1fr; } }
+.us-card { position: relative; padding: 22px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.us-card::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; border-radius: var(--radius) var(--radius) 0 0; background: var(--lc); opacity: .85; }
+.us-head { display: flex; align-items: center; gap: 12px; }
+.us-title { min-width: 0; }
+.us-head h2 { font-size: 21px; font-weight: 700; }
+.us-head p { margin: 2px 0 0; }
+.us-head .pill { margin-left: auto; flex: none; }
+.us-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.us-item { min-width: 0; display: flex; align-items: center; gap: 4px; padding-right: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-2); transition: border-color .15s; }
+.us-item:hover, .us-item:focus-within { border-color: color-mix(in srgb, var(--lc) 45%, var(--border)); }
+.us-pick { flex: 1; min-width: 0; min-height: 58px; display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 0; border-radius: 12px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.us-pick:focus-visible { outline: 2px solid var(--lc); outline-offset: -2px; }
+.us-pick .avatar { color: var(--lc); }
+.us-pick > svg { flex: none; color: var(--muted); }
+.us-pick:hover > svg { color: var(--lc); }
+.us-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.us-text b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-tools { display: flex; gap: 2px; flex: none; }
+.us-empty { padding: 22px 16px; border: 1px dashed var(--border); border-radius: 12px; text-align: center; }
+.us-foot { display: flex; }
+@media (max-width: 560px) { .us-card { padding: 18px 16px; } .us-foot .btn { flex: 1; height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .us-item { transition: none; } }

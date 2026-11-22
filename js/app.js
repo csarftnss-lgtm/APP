@@ -1344,6 +1344,8 @@
   const collapsed = new Set((() => { try { return JSON.parse(lsGet('prepcoach-collapsed') || '[]'); } catch { return []; } })());
   const saveCollapsed = () => lsSet('prepcoach-collapsed', JSON.stringify([...collapsed]));
   const route = () => curRoute.split('/');
+  // Apartados del atleta elegido ('inicio' es la selección de usuarios; 'pg', Población general).
+  const ATH_ROUTES = ['atleta', 'cuestionario', 'plan', 'seg', 'acceso'];
   function go(r) {
     r = normRoute(r); closeDrawer(false);
     if (CLIENT && !r.startsWith('cliente')) r = 'cliente/plan';
@@ -1354,7 +1356,7 @@
 
   // ---- Inicio de sesión del profesional ----
   // Credenciales provisorias, guardadas como huella SHA-256 (no en texto plano).
-  const AUTH_HASH = '524afd342116ef9cf20885d3407fccae15b9591485a15f9e05af655d00b7ee62';
+  const AUTH_HASH = '91b1c2d656cfe266b103e708d5f3c1a9a4cf92d25db136672023a6ab7a08d6f6';
   const AUTH_KEY = 'prepcoach-auth';
   function sha256(text) {
     const rr = (v, n) => (v >>> n) | (v << (32 - n));
@@ -1431,6 +1433,8 @@
       raw = act.value;
       try { sel = [act.selectionStart, act.selectionEnd]; } catch { sel = null; }
     }
+    // Sin atletas, los apartados del atleta no tienen qué mostrar: se vuelve a la selección de usuarios.
+    if (AUTH && ready && !isClientView() && !A() && ATH_ROUTES.includes(route()[0])) { curRoute = 'inicio'; lsSet('prepcoach-route', 'inicio'); }
     renderHeader();
     if (S.activeId) lsSet('prepcoach-active', S.activeId);
     const [r0, r1v] = route();
@@ -1445,8 +1449,8 @@
     }
     if (!ready) html = viewLoading();
     else if (isClientView()) html = viewClient();
+    else if (r0 === 'inicio') html = viewSelect();
     else if (r0 === 'pg') html = viewPG();
-    else if (!A()) html = viewEmpty();
     else if (r0 === 'cuestionario') html = viewQ();
     else if (r0 === 'plan') html = viewPlan(r1v || 'req');
     else if (r0 === 'seg') html = viewSegSection();
@@ -1516,21 +1520,20 @@
       setSaveState(saveState);
       return;
     }
-    // En el inicio los tres apartados ya están como recuadros: el menú superior solo aparece dentro de un apartado,
-    // para cambiar de uno a otro sin volver al inicio.
-    // Población general es un apartado totalmente aparte: dentro de él solo se muestra el botón de Inicio,
-    // y no aparece en el menú de los apartados del atleta.
-    // En Acceso del cliente tampoco se repiten los apartados: solo el botón de Inicio.
-    const inSection = ['cuestionario', 'plan', 'seg', 'pg', 'acceso'].includes(r0), isPG = r0 === 'pg';
-    $('#mainnav').innerHTML = inSection && (A() || isPG) ? (isPG || r0 === 'acceso' ? [['inicio', 'Inicio']] : [['inicio', 'Inicio'], ['cuestionario', 'Cuestionario inicial'], ['plan', 'Plan'], ['seg', 'Seguimiento']])
-      .map(([k, l]) => `<a href="#/${k}" class="${r0 === k ? 'active' : ''}">${k === 'inicio' ? ic('chevL', 14) + ' ' : ''}${l}</a>`).join('') : '';
+    // Tras el inicio de sesión se elige un usuario ('inicio'). Fuera de esa pantalla, el menú superior
+    // empieza con «Usuarios» para volver a elegir. Población general es aparte: solo muestra «Usuarios».
+    // Dentro de un atleta se agregan su resumen y sus tres apartados (en Acceso del cliente, solo el resumen).
+    const inAth = ATH_ROUTES.includes(r0) && !!A();
+    const nav = r0 === 'inicio' ? [] : [['inicio', 'Usuarios']].concat(!inAth ? [] : r0 === 'acceso' ? [['atleta', 'Resumen']]
+      : [['atleta', 'Resumen'], ['cuestionario', 'Cuestionario inicial'], ['plan', 'Plan'], ['seg', 'Seguimiento']]);
+    $('#mainnav').innerHTML = nav.map(([k, l]) => `<a href="#/${k}" class="${r0 === k ? 'active' : ''}">${k === 'inicio' ? ic('chevL', 14) + ' ' : ''}${l}</a>`).join('');
     const a = A();
     $('#topbar-right').innerHTML = `
       <span class="save-state" id="save-state"><span class="dot"></span>Guardado</span>
-      ${S.athletes.length && !isPG ? `<select class="select" id="athlete-select" style="width:auto;min-width:180px;height:34px" title="Atleta activo">
+      ${inAth ? `<select class="select" id="athlete-select" style="width:auto;min-width:180px;height:34px" title="Atleta activo">
         ${S.athletes.map((x) => `<option value="${x.id}" ${a && x.id === a.id ? 'selected' : ''}>${esc(x.q.nombre || 'Sin nombre')}</option>`).join('')}
       </select>` : ''}
-      ${isPG ? '' : `<button class="btn sm primary" data-action="newAthlete">${ic('plus', 14)} Atleta</button>`}
+      ${inAth ? `<button class="btn sm primary" data-action="newAthlete">${ic('plus', 14)} Atleta</button>` : ''}
       <button class="btn sm icon ghost" data-action="exportJSON" title="Exportar respaldo (JSON)">${ic('down', 15)}</button>
       <button class="btn sm icon ghost" data-action="importJSON" title="Importar respaldo (JSON)">${ic('up', 15)}</button>
       ${themeBtn()}
@@ -1543,14 +1546,6 @@
   // =====================================================================
   function viewLoading() {
     return CLIENT ? viewClientStatus() : `<div class="card empty"><div class="e-ic">${ic('db', 30)}</div><h2>Cargando tus atletas…</h2><p>Conectando con la base de datos sincronizada.</p></div>`;
-  }
-  function viewEmpty() {
-    return `${homeHead(null)}
-    <div class="card card-pad row" style="justify-content:space-between;margin-bottom:18px">
-      <div><b>Crea tu primer atleta</b><div class="small muted">Con un atleta activo se habilitan el cuestionario, la planificación y el seguimiento.</div></div>
-      <button class="btn primary" data-action="newAthlete">${ic('plus', 15)} Crear atleta</button>
-    </div>
-    ${launchGrid(null)}`;
   }
 
   const Q_SECTIONS = [
@@ -1571,8 +1566,8 @@
         <div class="login-brand"><span class="brand-mark login-mark">P</span>
           <div><div class="eyebrow">PrepCoach</div><h1 id="login-title">Inicio de sesión</h1><p class="muted">Acceso del preparador</p></div></div>
         <form id="login-form" class="login-form" novalidate>
-          <div class="field"><label for="login-user">Nombre</label>
-            <input class="input" id="login-user" name="username" autocomplete="username" autocapitalize="words" spellcheck="false" required></div>
+          <div class="field"><label for="login-user">Usuario</label>
+            <input class="input" id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
           <div class="field"><label for="login-pass">Contraseña</label>
             <div class="pass-wrap"><input class="input" id="login-pass" name="password" type="password" autocomplete="current-password" required>
               <button type="button" class="pass-eye" data-action="togglePass" aria-label="Mostrar contraseña" aria-pressed="false">${ic('eye', 16)}</button></div></div>
@@ -1585,24 +1580,64 @@
     </div>`;
   }
 
-  // ---- Menú inicial: los tres apartados del atleta activo ----
+  // ---- Selección de usuarios (tras el inicio de sesión): Atletas y Población general ----
+  const initialsOf = (n) => (n || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
+  const pgActive = () => (S.pg.clients || []).find((c) => c.id === S.pg.activeId) || null;
+  function viewSelect() {
+    const ath = S.athletes, pgc = S.pg.clients || [];
+    const count = (n, one, many) => (n ? `${n} ${n === 1 ? one : many}` : 'Sin usuarios');
+    const row = (o) => `<li class="us-item">
+        <button type="button" class="us-pick" data-action="${o.action}" data-id="${o.id}">
+          <span class="avatar sm">${esc(initialsOf(o.name))}</span>
+          <span class="us-text"><b>${esc(o.name)}</b>${o.meta ? `<span class="small muted">${esc(o.meta)}</span>` : ''}</span>
+          ${ic('chevR', 16)}
+        </button>
+        <span class="us-tools">${o.tools}</span>
+      </li>`;
+    const card = (o) => `<section class="card us-card" style="--lc:${o.color}" aria-labelledby="${o.key}-title">
+        <div class="us-head"><span class="lc-ic">${ic(o.icon, 22)}</span>
+          <div class="us-title"><h2 id="${o.key}-title">${o.title}</h2><p class="small muted">${o.desc}</p></div>
+          <span class="pill">${o.count}</span></div>
+        ${o.rows ? `<ul class="us-list">${o.rows}</ul>` : `<div class="us-empty small muted">${o.empty}</div>`}
+        <div class="us-foot"><button class="btn primary" data-action="${o.newAction}">${ic('plus', 15)} ${o.newLabel}</button></div>
+      </section>`;
+    const athRows = ath.map((x) => { const l = lastWeight(x), n = x.q.nombre || 'Sin nombre'; return row({ action: 'pickAthlete', id: x.id, name: n,
+      meta: [weekEtapa(x, currentWeek(x)), l ? `${fmt(l.v, 1)} kg` : null].filter(Boolean).join(' · '),
+      tools: `<button class="btn xs ghost icon" data-action="dupAthlete" data-id="${x.id}" title="Duplicar plan" aria-label="Duplicar plan de ${esc(n)}">${ic('copy', 13)}</button>
+        <button class="btn xs ghost icon danger" data-action="delAthlete" data-id="${x.id}" title="Eliminar" aria-label="Eliminar a ${esc(n)}">${ic('trash', 13)}</button>` }); }).join('');
+    const pgRows = pgc.map((c) => row({ action: 'pickPG', id: c.id, name: c.nombre || 'Sin nombre', meta: c.creado ? `Desde ${fmtDate(c.creado, true)}` : '',
+      tools: `<button class="btn xs ghost icon danger" data-action="delPGClient" data-id="${c.id}" title="Eliminar" aria-label="Eliminar a ${esc(c.nombre || 'Sin nombre')}">${ic('trash', 13)}</button>` })).join('');
+    return `<div class="home-head"><div class="home-hello">
+        <div class="eyebrow">Hola, ${esc(PRO_NAME)}</div>
+        <h1 class="page-title">¿Con quién vas a trabajar hoy?</h1>
+        <div class="page-sub">Elige un atleta o un usuario de población general. Cada grupo tiene sus propios usuarios y no comparten datos.</div>
+      </div></div>
+      <div class="us-grid">
+        ${card({ key: 'us-ath', icon: 'user', color: 'var(--accent)', title: 'Atletas', desc: 'Cuestionario, plan y seguimiento', count: count(ath.length, 'atleta', 'atletas'),
+          rows: athRows, empty: 'Aún no hay atletas. Crea el primero para empezar.', newAction: 'newAthlete', newLabel: 'Nuevo atleta' })}
+        ${card({ key: 'us-pg', icon: 'people', color: 'var(--c-g)', title: 'Población general', desc: 'Apartado independiente de los atletas', count: count(pgc.length, 'usuario', 'usuarios'),
+          rows: pgRows, empty: 'Aún no hay usuarios de población general.', newAction: 'newPGClient', newLabel: 'Nuevo usuario' })}
+      </div>`;
+  }
+
+  // ---- Resumen del atleta elegido: sus tres apartados ----
   function homeHead(a) {
-    const initials = a ? (a.q.nombre || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') : '';
+    const initials = a ? initialsOf(a.q.nombre) : '';
     const rc = a ? reqCalc(a) : null;
     const meta = a ? [rc.e.edad != null ? rc.e.edad + ' años' : null, weekEtapa(a, currentWeek(a)), `${S.athletes.length} ${S.athletes.length === 1 ? 'atleta' : 'atletas'} en total`].filter(Boolean).map(esc).join(' · ') : '';
     // Botón al acceso del cliente (bajo «Cambiar o gestionar»), con un punto que indica su estado.
     const acc = !a ? null : linkedUid(a) ? ['ok', 'Conectado'] : a.portal.token ? ['warn', 'Esperando al cliente'] : ['none', 'Sin enlace'];
     return `<div class="home-head">
       <div class="home-hello">
-        <div class="eyebrow">Hola, ${esc(PRO_NAME)}</div>
+        <div class="eyebrow">Resumen del atleta</div>
         <h1 class="page-title">¿Qué vas a trabajar hoy?</h1>
-        <div class="page-sub">Cuestionario, Plan y Seguimiento comparten los datos del atleta activo: lo que cambies en uno se refleja en los demás. Población general funciona por separado.</div>
+        <div class="page-sub">Cuestionario, Plan y Seguimiento comparten los datos del atleta activo: lo que cambies en uno se refleja en los demás.</div>
       </div>
       ${a ? `<div class="card athlete-bar">
         <span class="avatar sm">${esc(initials)}</span>
         <div class="ab-text"><span class="ab-label">Atleta activo</span><b>${esc(a.q.nombre || 'Sin nombre')}</b><span class="small muted">${meta}</span></div>
         <div class="ab-actions">
-          <button class="btn sm" data-action="manageAthletes">${ic('user', 14)} Cambiar o gestionar</button>
+          <a class="btn sm" href="#/inicio">${ic('user', 14)} Cambiar de usuario</a>
           <button class="btn sm primary" data-action="newAthlete">${ic('plus', 14)} Nuevo atleta</button>
           <a class="btn sm ab-access" href="#/acceso" title="Acceso del cliente · ${acc[1]}" aria-label="Acceso del cliente (${acc[1]})">${ic('link', 14)} Acceso del cliente <span class="ab-dot ${acc[0]}" aria-hidden="true"></span></a>
         </div>
@@ -1641,24 +1676,19 @@
       </div>`;
       sChips = [['panel', 'Panel'], ['diario', 'Registro diario'], ['semanal', 'Semanal'], ['guia', 'Instrucciones']].map(([k, l]) => `<button type="button" class="lc-chip" data-action="trackTab" data-v="${k}">${l}</button>`).join('');
     }
-    const pgN = (S.pg && S.pg.clients || []).length;
-    const pgCard = launchCard({ n: '04', icon: 'people', color: 'var(--c-g)', title: 'Población general', href: '#/pg',
-      desc: 'Abordaje nutricional para población general, con su propio enfoque. Es independiente de los atletas: no comparte datos con los otros apartados.',
-      status: `<div class="lc-rows"><div class="lc-row"><span>Estado</span><span class="pill">${pgN ? pgN + ' registrados' : 'En blanco'}</span></div><div class="lc-row"><span>Portal del cliente</span><span class="pill">Espacio propio (reservado)</span></div></div>`,
-      cta: 'Abrir población general' });
     return `<div class="launch-grid">
       ${launchCard({ n: '01', icon: 'clip', color: 'var(--accent)', title: 'Cuestionario inicial', href: '#/cuestionario', desc: 'Datos básicos, objetivo, suplementación, actividad física, nutrición peri-entrenamiento, recordatorio de 24 h y consumo.', status: qStatus, chips: qChips, cta: 'Abrir cuestionario', disabled: dis })}
       ${launchCard({ n: '02', icon: 'target', color: 'var(--c-c)', title: 'Plan', href: '#/plan/req', desc: 'Requerimientos, planificación de las etapas, menú diario y distribución de comidas, con la base de alimentos.', status: pStatus, chips: pChips, cta: 'Abrir planificación', disabled: dis })}
       ${launchCard({ n: '03', icon: 'chart', color: 'var(--ok)', title: 'Seguimiento', href: '#/seg', desc: 'Panel de progreso, registro diario, seguimiento semanal e instrucciones.', status: sStatus, chips: sChips, cta: 'Abrir seguimiento', disabled: dis })}
-      ${pgCard}
     </div>`;
   }
 
-  // ---- Población general: apartado independiente, por ahora en blanco ----
+  // ---- Población general: apartado independiente, por ahora en blanco (con el usuario elegido arriba) ----
   function viewPG() {
+    const c = pgActive(), name = c ? c.nombre || 'Sin nombre' : 'Población general';
     return `<div class="plan-layout ${sbCollapsed ? 'sb-collapsed' : ''}">
       <aside class="sidebar" id="plan-sidebar" aria-label="Secciones de población general">
-        <div class="sb-head"><div class="sb-athlete"><span class="avatar sm">${ic('people', 16)}</span><div class="sb-ath-text"><b>Población general</b><span>Apartado independiente</span></div></div>
+        <div class="sb-head"><div class="sb-athlete"><span class="avatar sm">${c ? esc(initialsOf(name)) : ic('people', 16)}</span><div class="sb-ath-text"><b>${esc(name)}</b><span>Población general</span></div></div>
           <button class="btn xs ghost icon sb-close" data-action="closeDrawer" aria-label="Cerrar panel">${ic('x', 15)}</button></div>
         <nav class="sb-nav"><div class="sb-group"><div class="sb-label">Población general</div>
           <a class="sb-item active" href="#/pg" aria-current="page"><span class="sb-ic">${ic('people', 17)}</span><span class="sb-text">Inicio del apartado</span></a></div></nav>
@@ -1668,7 +1698,7 @@
       <div class="plan-main" id="plan-main">
         <div class="page-head"><div class="plan-head">
           <button class="btn sm sb-toggle" data-action="openDrawer" aria-controls="plan-sidebar" aria-expanded="false">${ic('sidebar', 15)}<span>Secciones</span></button>
-          <div><div class="eyebrow">Población general</div><div class="page-title">Población general</div></div>
+          <div><div class="eyebrow">Población general</div><div class="page-title">${esc(name)}</div></div>
         </div></div>
         <div class="pg-blank" aria-label="Apartado en blanco"></div>
       </div>
@@ -1683,24 +1713,9 @@
     const a = A();
     return `<div class="page-head">
         <div><div class="eyebrow">Atleta activo · ${esc(a.q.nombre || 'Sin nombre')}</div><h1 class="page-title">Acceso del cliente</h1></div>
-        <a class="btn sm" href="#/inicio">${ic('chevL', 14)} Volver al inicio</a>
+        <a class="btn sm" href="#/atleta">${ic('chevL', 14)} Volver al resumen</a>
       </div>
       ${segAccess(a)}`;
-  }
-
-  // Gestión de atletas en una ventana, para que el inicio muestre solo los tres apartados.
-  function athletesModal() {
-    const a = A();
-    return `<div class="modal-head row" style="justify-content:space-between"><h3>Atletas</h3><span class="small muted">${S.athletes.length} registrados</span></div>
-      <div class="modal-body"><div class="table-wrap"><table class="t">
-        <thead><tr><th>Nombre</th><th>Etapa</th><th class="num">Último peso</th><th></th></tr></thead>
-        <tbody>${S.athletes.map((x) => { const l = lastWeight(x); return `<tr>
-          <td><b>${esc(x.q.nombre || 'Sin nombre')}</b> ${a && x.id === a.id ? '<span class="pill gold">Activo</span>' : ''} ${linkedUid(x) ? '<span class="pill ok">Portal</span>' : ''}</td>
-          <td>${esc(weekEtapa(x, currentWeek(x)))}</td>
-          <td class="num">${l ? fmt(l.v, 1) + ' kg' : '—'}</td>
-          <td class="right nowrap">${a && x.id === a.id ? '' : `<button class="btn xs" data-action="switchAthlete" data-id="${x.id}">Abrir</button>`} <button class="btn xs ghost" data-action="dupAthlete" data-id="${x.id}" title="Duplicar plan">${ic('copy', 13)}</button> <button class="btn xs ghost danger" data-action="delAthlete" data-id="${x.id}" title="Eliminar">${ic('trash', 13)}</button></td>
-        </tr>`; }).join('')}</tbody></table></div></div>
-      <div class="modal-foot"><button class="btn ghost" data-action="closeModal">Cerrar</button><button class="btn primary" data-action="newAthlete">${ic('plus', 14)} Nuevo atleta</button></div>`;
   }
 
   // =====================================================================
@@ -4046,7 +4061,22 @@
       }, 'Crear');
     },
     switchAthlete(el) { S.activeId = el.dataset.id; closeModal(); commit(); },
-    manageAthletes() { openModal(athletesModal(), null, true); },
+    pickAthlete(el) { S.activeId = el.dataset.id; save(); go('atleta'); },
+    newPGClient() {
+      promptModal('Nuevo usuario · Población general', F('Nombre y apellido', '<input class="input" id="m-name" placeholder="Ej.: Camila Rojas">'), () => {
+        const c = { id: uid(), nombre: $('#m-name').value.trim() || 'Nuevo usuario', creado: todayISO() };
+        S.pg.clients.push(c); S.pg.activeId = c.id; closeModal(); save(); go('pg');
+      }, 'Crear');
+    },
+    pickPG(el) { S.pg.activeId = el.dataset.id; save(); go('pg'); },
+    delPGClient(el) {
+      const c = S.pg.clients.find((x) => x.id === el.dataset.id); if (!c) return;
+      confirmModal('Eliminar usuario', `Se eliminará <b>${esc(c.nombre || 'Sin nombre')}</b> de Población general. Esta acción no se puede deshacer.`, () => {
+        S.pg.clients = S.pg.clients.filter((x) => x.id !== c.id);
+        if (S.pg.activeId === c.id) S.pg.activeId = null;
+        closeModal(); commit();
+      });
+    },
     logout() { logout(); },
     togglePass(el) {
       const inp = $('#login-pass'); if (!inp) return;
@@ -4547,7 +4577,7 @@
     const err = $('#login-error'), user = $('#login-user').value, pass = $('#login-pass').value;
     const show = (msg) => { err.textContent = msg; err.hidden = false; const c = $('.login-card'); c.classList.remove('shake'); void c.offsetWidth; c.classList.add('shake'); };
     if (Date.now() < loginLockUntil) { show(`Demasiados intentos. Espera ${Math.ceil((loginLockUntil - Date.now()) / 1000)} segundos.`); return; }
-    if (!user.trim() || !pass) { show('Escribe tu nombre y tu contraseña.'); return; }
+    if (!user.trim() || !pass) { show('Escribe tu usuario y tu contraseña.'); return; }
     if (tryLogin(user, pass, $('#login-remember').checked)) {
       loginFails = 0; curRoute = 'inicio'; lsSet('prepcoach-route', 'inicio');
       render(); window.scrollTo(0, 0);
@@ -4555,7 +4585,7 @@
     }
     loginFails++;
     if (loginFails >= 5) { loginLockUntil = Date.now() + 30000; loginFails = 0; }
-    show('Nombre o contraseña incorrectos.');
+    show('Usuario o contraseña incorrectos.');
     $('#login-pass').value = ''; $('#login-pass').focus();
   });
   document.addEventListener('change', (ev) => {
@@ -4691,6 +4721,8 @@
     s.recipes = Array.isArray(s.recipes) ? s.recipes : []; // recetario (antes no existía)
     addSeedFoods(s);
     s.pg = s.pg && typeof s.pg === 'object' ? s.pg : { clients: [] }; // Población general: datos propios, sin relación con los atletas
+    if (!Array.isArray(s.pg.clients)) s.pg.clients = [];
+    if (s.pg.activeId && !s.pg.clients.some((c) => c && c.id === s.pg.activeId)) s.pg.activeId = null; // usuario elegido en Población general
     if (!s.athletes.find((a) => a.id === s.activeId)) s.activeId = s.athletes[0]?.id || null;
     return s;
   }

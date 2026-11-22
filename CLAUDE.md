@@ -39,7 +39,7 @@ Forma de trabajar con el usuario:
   ```
   Luego abre `http://localhost:8765/APP/`. Repite el `rsync` después de cada edición.
 - **Ingreso:** la app pide usuario y clave. Para probar sin la clave, pon en localStorage `prepcoach-auth` con el valor de la constante `AUTH_HASH` de `js/app.js` y recarga. No copies ese valor en archivos nuevos.
-- **Rutas:** se guardan en localStorage `prepcoach-route` (`inicio`, `cuestionario`, `plan/req`, `plan/planif`, `plan/menu`, `plan/dist`, `plan/minuta`, `plan/alimentos`, `seg`, `acceso`, `pg`). Fija la clave y recarga, o navega con `#/ruta`.
+- **Rutas:** se guardan en localStorage `prepcoach-route` (`inicio` = selección de usuarios, `atleta` = resumen del atleta, `cuestionario`, `plan/req`, `plan/planif`, `plan/menu`, `plan/dist`, `plan/minuta`, `plan/alimentos`, `seg`, `acceso`, `pg`). Fija la clave y recarga, o navega con `#/ruta`.
 - **Importar un respaldo:** usa `setInputFiles('#json-input', archivo)` y luego confirma en `#modal-root .btn.primary`.
 - **Leer el estado:** está en IndexedDB `prepcoach`, store `kv`, clave `state`.
 - **PDF (pdfmake 0.2.7 desde cdnjs):**
@@ -61,6 +61,7 @@ Forma de trabajar con el usuario:
   - Las imágenes van dentro del JSON como data URL, así que un respaldo puede pesar varios MB.
 - **Estado:**
   - `S = { v, foods[], athletes[], activeId, recipes[], foodsSeedN, pg }`.
+  - `S.pg = { clients: [{ id, nombre, creado }], activeId }`: usuarios de Población general, aparte de los atletas.
   - Cada atleta tiene `{ id, q, req, dayTypes[], activeDay, tracking:{config, weeks, daily}, ui, calendar, portal, planif… }`.
 - **Migraciones:**
   - `migrate(s)` y `migrateAthlete(a)` se ejecutan al cargar y al importar.
@@ -103,6 +104,11 @@ Forma de trabajar con el usuario:
 - **Base de alimentos:**
   - `addSeedFoods` agrega una sola vez los alimentos nuevos de `SEED_FOODS` desde el índice 150 (`SEED_BASE`), salvo que ya exista uno con el mismo nombre.
   - Para sumar alimentos a la base de todos los usuarios, **añádelos al final de `js/foods.js`**, nunca en medio.
+- **Ingreso y selección de usuarios:**
+  - El inicio de sesión usa usuario y clave provisorios (los conoce el usuario; la seguridad se verá después).
+  - Tras ingresar se ve `viewSelect` (ruta `inicio`) con dos recuadros: Atletas y Población general.
+  - Elegir un atleta lleva a su resumen (`atleta`, `viewHome`). Elegir un usuario de Población general lleva a `pg` (en blanco por ahora).
+  - El menú superior empieza con «Usuarios» para volver a la selección (`ATH_ROUTES` define los apartados del atleta).
 - **Portal del cliente:** solo funciona dentro del artifact de Claude; en GitHub Pages está en modo local.
 
 ## 6. Cargar un atleta desde planillas (Drive)
