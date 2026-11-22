@@ -3600,7 +3600,7 @@
     const rows = pm.map(({ m, opts }, i) => {
       const cells = opts.map((o, k) => {
         const ot = optTotals(o), img = o.image ? imgOf(o.image) : '';
-        const foods = o.foods.filter((l) => l.foodId || String(l.foodName || '').trim()).map((l) => { const x = lineCalc(l), c = String(l.cantidad || '').trim(); return `<tr><td>${esc(x.f ? x.f.name : l.foodName || '')}</td><td class="${c ? '' : 'mg-miss'}">${esc(c || '—')}</td></tr>`; }).join('');
+        const foods = o.foods.filter((l) => l.foodId || String(l.foodName || '').trim()).map((l) => { const x = lineCalc(l), c = String(l.cantidad || '').trim(); return `<tr><td>${esc(x.f ? x.f.name : l.foodName || '')}</td><td class="${c ? (c.length > 16 ? 'mg-q-long' : '') : 'mg-miss'}">${esc(c || '—')}</td></tr>`; }).join('');
         return `<div class="mg-opt"><div class="mg-on">Opción ${k + 1}</div>${o.title ? `<div class="mg-dish">${esc(o.title)}</div>` : ''}
           ${img ? `<img class="mg-img" src="${img}" alt="">` : ''}
           <table class="mg-ft"><tbody>${foods}</tbody></table>
@@ -3615,13 +3615,17 @@
   // Hoja horizontal A4 a 96 ppp (1123 × 794 px) con los márgenes del PDF; se escala para caber en la pantalla.
   const LAND_PX = { w: 1123, h: 794, avail: 794 - 53 - 61 };
   function scalePreviewSheets() {
-    document.querySelectorAll('.mn-land-wrap').forEach((w) => { const s = w.clientWidth / LAND_PX.w; w.style.setProperty('--s', s); w.style.height = Math.round(LAND_PX.h * s) + 'px'; });
+    document.querySelectorAll('.mn-land-wrap').forEach((w) => {
+      const s = w.clientWidth / LAND_PX.w, paper = w.querySelector('.mn-land'), h = (paper && parseFloat(paper.style.height)) || LAND_PX.h;
+      w.style.setProperty('--s', s); w.style.aspectRatio = h > LAND_PX.h ? 'auto' : ''; w.style.height = Math.round(h * s) + 'px';
+    });
   }
   // Igual que en el PDF: letra e imagen más grandes con las que la minuta completa cabe en la hoja.
   function fitPreviewSheets() {
     scalePreviewSheets();
     document.querySelectorAll('.mn-land').forEach((el) => {
       const fit = el.querySelector('.mg-fit'); if (!fit) return;
+      const wrap = el.closest('.mn-land-wrap'); el.style.height = ''; if (wrap) delete wrap.dataset.pages;
       const hasImg = !!fit.querySelector('.mg-img');
       const ok = (f, ih) => { el.style.setProperty('--mg-fs', f); el.style.setProperty('--mg-ih', ih); el.classList.toggle('mg-noimg', !ih); return fit.offsetHeight <= LAND_PX.avail; };
       for (const [ih, fonts] of MINUTA_FITS) {
@@ -3630,8 +3634,13 @@
         while (lo <= hi) { const mid = (lo + hi) >> 1; if (ok(fonts[mid], ih)) { best = mid; hi = mid - 1; } else lo = mid + 1; }
         if (best >= 0) { ok(fonts[best], ih); return; }
       }
+      // Ni con la letra mínima cabe en una hoja: en el PDF continúa en otra hoja horizontal. La vista previa muestra
+      // la minuta completa (la hoja se alarga) y avisa cuántas hojas ocupa.
       ok(5, 0);
+      const need = fit.offsetHeight;
+      if (need > LAND_PX.avail) { el.style.height = `${need + 53 + 61}px`; if (wrap) wrap.dataset.pages = Math.ceil(need / LAND_PX.avail); }
     });
+    scalePreviewSheets();
   }
   // ---- La planificación se descarga en PDF (hojas A4, texto real y seleccionable) ----
   // El generador de PDF (pdfmake) pesa ~2 MB: se carga solo al pulsar el botón, la primera vez.

@@ -1445,6 +1445,10 @@ label.btn.file-pick { display: inline-flex; align-items: center; }
 .mn-land table.mg-ft { width: 100%; border-collapse: collapse; margin-top: 4px; text-align: left; font-size: calc(var(--mg-fs) * 1.333px); line-height: 1.2; }
 .mn-land .mg-ft td { padding: 1px 1px; border: 0; border-bottom: .7px solid var(--pm-line, #e6d9b8); background: none; text-align: left; font-weight: 400; }
 .mn-land .mg-ft td:last-child { text-align: right; font-weight: 700; white-space: nowrap; padding-left: 8px; }
+/* Cantidades largas («Verduras a gusto como tomate, espinacas, etc»): se reparten en varias líneas, como en el PDF,
+   para no dejar sin espacio la columna de los alimentos. Las cortas siguen en una sola línea. */
+.mn-land .mg-ft td:first-child { min-width: 5.5em; }
+.mn-land .mg-ft td.mg-q-long { white-space: normal; overflow-wrap: break-word; text-wrap: balance; }
 .mn-land .mg-ft td.mg-miss { color: #999; }
 .mn-land .mg-ft tr:last-child td { border-bottom: 0; }
 .mg-opt .mg-tot { text-align: center; }
@@ -1687,3 +1691,7 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .mn-picks-l { align-self: center; margin: 0 2px 0 0; }
 .mn-part > .mn-pick { margin-left: max(0px, calc((100% - 820px) / 2)); }
 .mn-part:has(> .mn-land-wrap) > .mn-pick { margin-left: max(0px, calc((100% - 1123px) / 2)); }
+
+/* Minuta que no cabe en una hoja horizontal: la vista previa la muestra completa y avisa cuántas hojas ocupa en el PDF */
+.mn-land-wrap[data-pages]::after { content: 'Ocupa ' attr(data-pages) ' hojas en el PDF'; position: absolute; top: 8px; right: 8px; z-index: 2; padding: 3px 9px; border-radius: 999px;
+  font: 600 11px/1.4 var(--font); color: #5c4310; background: #fdf1d6; border: 1px solid #e8c77d; }
