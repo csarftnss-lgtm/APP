@@ -77,6 +77,7 @@ Forma de trabajar con el usuario:
 - **Etapas** (`tracking.config.stages`):
   - Cada etapa tiene tipo, fechas, requerimientos y metas.
   - `LOSS_TYPES` = Pérdida de grasa, Mini cut y Preparación competencia.
+  - Requerimientos (`s.reqs[idTipoDía]`): con `s.macroMode` ausente o `'g'` se anotan `{kcal, p, c, g}` en gramos y al lado se ve su g/kg. Con `'gkg'` se anotan `{pk, ck, gk}` en g/kg; los gramos salen del peso de referencia (`stageRefPeso`: peso inicial de la etapa o, si falta, el promedio de los 7 días previos, el de la 1.ª semana o el peso de Requerimientos) y las kcal se calculan solas. `stageTargets` resuelve ambos modos; al cambiar de modo (`setMacroMode`) se convierten los valores.
 - **Rangos de pérdida** (solo en etapas de pérdida):
   - `RANGOS`: `mod` (Moderado) va de 0,5 a 1 % semanal y `cons` (Conservador) de 0,3 a 0,5 %. `pers` usa `rmin` y `rmax`.
   - Bajo el rango se marca **Lento**, en azul (no significa malo). Dentro del rango, **Adecuado**. Sobre el rango, **Rápido**.
@@ -98,6 +99,8 @@ Forma de trabajar con el usuario:
 - **Descargar planificación:**
   - `planDocBody` dibuja la vista previa y `planPdfDef` arma el PDF.
   - `a.ui.docOff` lista los apartados que no se imprimen: `planif`, `cal`, `min:<idTipoDía>`, `dist` y `seg`. Los apartados se renumeran.
+  - `a.ui.docMacros` (`docMac`): si es `true`, la minuta y la distribución muestran kcal y macros; por defecto no (el atleta solo ve alimentos y cantidades). La Planificación siempre muestra los requerimientos.
+  - La primera hoja lleva la portada y el índice (`id: 'indice'`), con enlaces y número de hoja (`pageReference`) a cada apartado (`sec-<clave>`) y a cada minuta (`min-<idTipoDía>`). Cada apartado parte en hoja nueva y el pie de las hojas 2..N lleva «Volver al índice» (`pdfDoc(..., idx = true)`). Las ids de pdfmake no se pueden repetir en un documento.
   - La minuta va en horizontal.
   - Las cantidades largas usan la clase `mg-q-long`.
   - Si una minuta no cabe, la vista previa muestra «Ocupa N hojas en el PDF».

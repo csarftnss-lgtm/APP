@@ -722,9 +722,29 @@
     const c = (kcal - p * 4 - g * 9) / 4;
     return { kcal, p, c, g, ok: true, peso };
   }
+  // Peso de referencia de una etapa (macros en g/kg): el peso inicial anotado o, si falta, el promedio de los 7 días
+  // previos a la etapa, el de los pesajes de su 1.ª semana o el peso de Requerimientos. skipOwn: sin mirar el anotado.
+  function stageRefPeso(a, s, skipOwn = false) {
+    const own = skipOwn ? null : num(s && s.pesoInicial);
+    if (own != null) return { v: own, src: 'peso inicial de la etapa', auto: false };
+    if (s && stageDated(s)) {
+      const pre = weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1));
+      if (pre.length) return { v: mean(pre), src: 'promedio de los 7 días previos a la etapa', auto: true };
+      const w1 = weightsIn(a, s.inicio, addDays(s.inicio, 6));
+      if (w1.length) return { v: mean(w1), src: 'promedio de los pesajes de su 1.ª semana', auto: true };
+    }
+    return { v: eff(a).peso, src: 'peso de Requerimientos', auto: true };
+  }
   // Requerimientos que una ETAPA tiene anotados para un tipo de día: s.reqs = { idTipoDeDía: { kcal, p, c, g } } (macros en gramos).
+  // Con s.macroMode = 'gkg' los macros se anotan en g/kg de peso ({ pk, ck, gk }): los gramos salen del peso de referencia
+  // de la etapa y las kcal se calculan solas (P × 4 + C × 4 + G × 9).
   function stageTargets(a, s, dt) {
     const r = s && isPlain(s.reqs) && isPlain(s.reqs[dt.id]) ? s.reqs[dt.id] : {};
+    if (s && s.macroMode === 'gkg') {
+      const peso = stageRefPeso(a, s).v, gr = (x) => (x != null && peso != null ? x * peso : null);
+      const p = gr(num(r.pk)), c = gr(num(r.ck)), g = gr(num(r.gk)), ok = p != null && c != null && g != null;
+      return { kcal: ok ? p * 4 + c * 4 + g * 9 : null, p, c, g, ok, peso, gkg: true };
+    }
     const kcal = num(r.kcal), p = num(r.p), c = num(r.c), g = num(r.g);
     return { kcal, p, c, g, ok: kcal != null && p != null && c != null && g != null, peso: eff(a).peso };
   }
@@ -3017,24 +3037,43 @@
     return `<button type="button" class="dow${on ? ' on' : ''}" data-action="toggleStageDay" data-i="${i}" data-f="${f}" data-d="${d}" aria-pressed="${on}" title="${DOW_N[d]}" aria-label="${DOW_N[d]}">${l}</button>`; }).join('')}</div>`;
   const calcLine = (t) => `${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g`;
   // Requerimientos de la etapa: kcal y macros de cada tipo de día, anotados a mano o traídos de la calculadora.
+  // Los macros se anotan en gramos totales (al lado se ve su equivalencia en g/kg) o en g/kg de peso (al lado, los gramos).
   function stageReqs(a, s, i) {
-    const base = `tracking.config.stages.${i}.reqs`, rc = reqCalc(a);
-    const cell = (dt, f, lab) => `<td class="pad0">${I(`${base}.${dt.id}.${f}`, { cls: 'cell', num: true, live: true, ph: '—', attrs: `aria-label="${esc(lab)} · ${esc(dt.name)}"` })}</td>`;
+    const base = `tracking.config.stages.${i}.reqs`, rc = reqCalc(a), gkg = s.macroMode === 'gkg', ref = stageRefPeso(a, s), peso = ref.v;
+    const input = (dt, f, lab) => I(`${base}.${dt.id}.${f}`, { cls: 'cell', num: true, live: true, ph: '—', attrs: `aria-label="${esc(lab)} · ${esc(dt.name)}"` });
+    const mcell = (dt, f, lab, side, tip) => `<td class="pad0"><div class="mcell">${input(dt, f, lab)}<span class="mc-side" title="${tip}">${side}</span></div></td>`;
+    const perKg = (v) => (v != null && peso ? `${fmt(v / peso, 2)} g/kg` : '— g/kg');
+    const grams = (v) => (v != null ? `${fmt(v)} g` : '— g');
+    const kgTip = peso ? `Equivalencia con ${fmt(peso, 1)} kg de peso de referencia` : 'Falta el peso de referencia';
     const rows = a.dayTypes.map((dt) => {
-      const t = stageTargets(a, s, dt), has = t.p != null && t.c != null && t.g != null, sum = has ? t.p * 4 + t.c * 4 + t.g * 9 : null;
+      const t = stageTargets(a, s, dt), lbl = `<td class="lbl"><span class="color-dot" style="background:${esc(dt.color || 'var(--muted)')}"></span> ${esc(dt.name)}</td>`;
+      const st = `<td class="center">${t.ok ? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta</span>'}</td>`;
+      if (gkg) {
+        return `<tr>${lbl}${mcell(dt, 'pk', 'Proteínas (g/kg)', grams(t.p), kgTip)}${mcell(dt, 'ck', 'Carbohidratos (g/kg)', grams(t.c), kgTip)}${mcell(dt, 'gk', 'Grasas (g/kg)', grams(t.g), kgTip)}
+          <td class="num computed nowrap">${t.kcal != null ? `<b title="Proteínas × 4 + carbohidratos × 4 + grasas × 9">${fmt(t.kcal)} kcal</b>` : '<span class="muted">—</span>'}</td>${st}</tr>`;
+      }
+      const has = t.p != null && t.c != null && t.g != null, sum = has ? t.p * 4 + t.c * 4 + t.g * 9 : null;
       const off = sum != null && t.kcal ? Math.abs(sum - t.kcal) / t.kcal > 0.03 : false;
-      return `<tr><td class="lbl"><span class="color-dot" style="background:${esc(dt.color || 'var(--muted)')}"></span> ${esc(dt.name)}</td>
-        ${cell(dt, 'kcal', 'Kcal')}${cell(dt, 'p', 'Proteínas (g)')}${cell(dt, 'c', 'Carbohidratos (g)')}${cell(dt, 'g', 'Grasas (g)')}
-        <td class="num computed nowrap">${sum != null ? `<span${off ? ' style="color:var(--warn)"' : ''} title="Proteínas × 4 + carbohidratos × 4 + grasas × 9${off ? ': no coincide con las kcal anotadas' : ''}">${fmt(sum)} kcal</span>` : '<span class="muted">—</span>'}</td>
-        <td class="center">${t.ok ? '<span class="pill ok">Completo</span>' : '<span class="pill warn">Falta</span>'}</td></tr>`;
+      return `<tr>${lbl}<td class="pad0">${input(dt, 'kcal', 'Kcal')}</td>
+        ${mcell(dt, 'p', 'Proteínas (g)', perKg(t.p), kgTip)}${mcell(dt, 'c', 'Carbohidratos (g)', perKg(t.c), kgTip)}${mcell(dt, 'g', 'Grasas (g)', perKg(t.g), kgTip)}
+        <td class="num computed nowrap">${sum != null ? `<span${off ? ' style="color:var(--warn)"' : ''} title="Proteínas × 4 + carbohidratos × 4 + grasas × 9${off ? ': no coincide con las kcal anotadas' : ''}">${fmt(sum)} kcal</span>` : '<span class="muted">—</span>'}</td>${st}</tr>`;
     }).join('');
+    const head = gkg
+      ? '<th>Tipo de día</th><th class="num">Proteínas (g/kg)</th><th class="num">Carbohidratos (g/kg)</th><th class="num">Grasas (g/kg)</th><th class="num">Kcal (calculadas)</th><th></th>'
+      : '<th>Tipo de día</th><th class="num">Kcal</th><th class="num">Proteínas (g)</th><th class="num">Carbohidratos (g)</th><th class="num">Grasas (g)</th><th class="num">Suma de macros</th><th></th>';
+    const mode = `<div class="seg sm" role="group" aria-label="Cómo se anotan los macros de la etapa ${i + 1}">${[['g', 'Gramos totales'], ['gkg', 'g/kg de peso']].map(([k, l]) => { const on = (gkg ? 'gkg' : 'g') === k;
+      return `<button type="button" class="${on ? 'active' : ''}" data-action="setMacroMode" data-i="${i}" data-v="${k}" aria-pressed="${on}">${l}</button>`; }).join('')}</div>`;
+    const pesoTxt = peso != null ? `Peso de referencia: <b>${fmt(peso, 1)} kg</b> <span class="muted">(${ref.src}${ref.auto ? '; anota el peso inicial de la etapa para fijarlo' : ''})</span>`
+      : gkg ? '<span class="warn-text">Falta el peso de referencia: anota el peso inicial de la etapa o el peso en Requerimientos.</span>'
+      : '<span class="muted">Sin peso de referencia: la equivalencia en g/kg aparece al anotar el peso inicial de la etapa o el peso en Requerimientos.</span>';
     const calc = a.dayTypes.map((dt) => [dt, calcTargets(a, dt, rc)]).filter(([, t]) => t.ok);
     return `<div class="stage-objs stage-reqs mt16">
       <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Requerimientos de la etapa <span class="muted">· por tipo de día</span></div>
         <button class="btn sm" data-action="pullReqs" data-i="${i}" ${calc.length ? '' : 'disabled'}>${ic('calc', 14)} Traer los requerimientos de la calculadora</button></div>
-      <div class="table-wrap mt8"><table class="t req-table"><thead><tr><th>Tipo de día</th><th class="num">Kcal</th><th class="num">Proteínas (g)</th><th class="num">Carbohidratos (g)</th><th class="num">Grasas (g)</th><th class="num">Suma de macros</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="hint mt8">${calc.length
-        ? `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) da ahora, en ${ENERGY_L[rc.objetivo].toLowerCase()}: ${calc.map(([dt, t]) => `<b>${esc(dt.name)}</b> ${calcLine(t)}`).join(' · ')}. Al traerlos quedan copiados aquí: si después cambias la calculadora, esta etapa no cambia hasta que los traigas de nuevo.`
+      <div class="req-mode mt8"><span class="small muted">Macros en</span>${mode}<span class="small">${pesoTxt}</span></div>
+      <div class="table-wrap mt8"><table class="t req-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="hint mt8">${gkg ? 'Anota cada macro en gramos por kilo de peso: al lado aparecen los gramos del día y las kcal se calculan solas (proteínas × 4 + carbohidratos × 4 + grasas × 9). ' : 'Al lado de cada macro aparece su equivalencia en gramos por kilo de peso. '}${calc.length
+        ? `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) da ahora, en ${ENERGY_L[rc.objetivo].toLowerCase()}: ${calc.map(([dt, t]) => `<b>${esc(dt.name)}</b> ${calcLine(t)}`).join(' · ')}. Al traerlos quedan copiados aquí${gkg ? ' (con sus mismos g/kg)' : ''}: si después cambias la calculadora, esta etapa no cambia hasta que los traigas de nuevo.`
         : `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) aún no tiene resultados: complétala para poder traerlos, o anota los requerimientos a mano.`}</div>
     </div>`;
   }
@@ -3081,9 +3120,7 @@
     let fields = '';
     if (!s.tipo) fields = '<div class="callout small mt16"><b>Etapa sin determinar.</b> No se usa en ninguna parte del proceso (calendario, registro, seguimiento, requerimientos ni documento), aunque tenga fechas. Elige un objetivo cuando quieras activarla.</div>';
     else {
-      const dly = a.tracking.daily || {}, w1 = stageDated(s) ? Object.keys(dly).filter((d) => d >= s.inicio && d < addDays(s.inicio, 7)).map((d) => num(dly[d].peso)).filter((v) => v != null) : [];
-      const pre = stageDated(s) ? weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1)) : [];
-      const auto = pre.length ? mean(pre) : w1.length ? mean(w1) : eff(a).peso, autoTxt = pre.length ? 'promedio de los 7 días previos a la etapa' : w1.length ? 'promedio de los pesajes de su 1.ª semana' : 'peso de Requerimientos';
+      const ar = stageRefPeso(a, s, true), auto = ar.v, autoTxt = ar.src;
       const nE = (s.diasEntreno || []).length, nP = (s.diasPeso || []).length;
       fields = `
         <div class="grid ${stageKind(s) === 'loss' ? 'g3' : 'g4'} mt16">
@@ -3365,9 +3402,11 @@
       <span class="spacer"></span>
       <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy && nOn ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
+    <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
+      <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span></div>
     <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
       ${nOn < parts.length ? '<button class="btn xs ghost" data-action="docAll" data-v="1">Marcar todos</button>' : '<button class="btn xs ghost" data-action="docAll" data-v="0">Desmarcar todos</button>'}</div>
-    <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos.</p>
+    <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos. La primera hoja lleva la portada y el <b>índice</b>: en el PDF cada línea lleva a su apartado y, al pie de cada hoja, «Volver al índice» regresa a él.</p>
     <div class="mn-stage"><div class="mn-sheets" id="minuta-preview" role="document" aria-label="Vista previa de la planificación">${planDocBody(a, (v) => imgSrc(v), true)}</div></div>`;
   }
 
@@ -3413,6 +3452,12 @@
     .pd-pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#eee;color:#555;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}.pd-pill.slow{background:#e3eefc;color:#1f5aa6}
     .pd-foot{font-size:10.5px;color:#666;margin:8px 0 0}
+    .pd-toc{margin-top:26px}.pd-toc-h{font-size:18px;margin-bottom:3px}.pd-toc-note{font-size:11px;color:#666;margin:0 0 10px}
+    .pd-toc ol{list-style:none;margin:0;padding:0}.pd-toc li{border-bottom:1px solid #e3e3e3}.pd-toc li:last-child{border-bottom:0}
+    .pd-toc a,.pd-toc button{display:flex;align-items:baseline;gap:10px;width:100%;padding:8px 2px;border:0;background:none;font:inherit;font-size:14px;font-weight:700;color:#111;text-align:left;text-decoration:none;cursor:pointer}
+    .pd-toc li.sub a,.pd-toc li.sub button{padding-left:32px;font-size:12.5px;font-weight:500;color:#333}
+    .pd-toc a:hover,.pd-toc button:hover{color:#8a6a1f}.pd-toc-n{flex:none;width:20px;color:#8a6a1f}
+    .pd-back{margin-left:auto;font-size:10px;font-weight:600;letter-spacing:0;text-transform:none;color:#8a6a1f}
     .pd-stage{margin-bottom:16px;break-inside:avoid}.pd-stage-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border-bottom:1.5px solid #d8b15f;padding-bottom:5px;margin-bottom:6px}
     .pd-stage-h b{font-size:15px}.pd-stage-h span:last-child{margin-left:auto;font-size:11.5px;color:#333}
     .pd-stage-n{display:inline-grid;place-items:center;min-width:24px;height:20px;border-radius:4px;background:#111;color:#fff;font-size:10.5px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -3440,7 +3485,7 @@
   const minutaLabel = () => 'Descargar planificación';
   // Contenido de la minuta: lo usan el archivo descargado, la impresión y la vista previa (imgOf resuelve cada imagen).
   function minutaBody(a, dt, pmeals, imgOf, head = null) {
-    const t = dayTargets(a, dt), tot = dayTotals(dt);
+    const t = dayTargets(a, dt), tot = dayTotals(dt), mac = docMac(a);
     const meals = pmeals.map(({ m, opts }, i) => `<div class="pm-meal"><h2>${esc(String(m.name || '').trim() || `Comida ${i + 1}`)}${m.time ? ` <span>${esc(m.time)}</span>` : ''}</h2>
       ${opts.map((o, k) => { const ot = optTotals(o); return `<div class="pm-opt">
         <h3>Opción ${k + 1}${o.title ? ' — ' + esc(o.title) : ''}</h3>
@@ -3448,10 +3493,10 @@
         <table><thead><tr><th>Alimento</th><th>Cantidad</th></tr></thead><tbody>
         ${o.foods.filter((l) => l.foodId || String(l.foodName || '').trim()).map((l) => { const x = lineCalc(l); return `<tr><td>${esc(x.f ? x.f.name : l.foodName || '')}</td><td>${esc(l.cantidad || '—')}</td></tr>`; }).join('')}
         </tbody></table>
-        <div class="pm-total"><span class="pm-tl">Aporte total</span><b>${fmt(ot.kcal)} kcal</b><span>Proteína ${fmt(ot.p, 1)} g</span><span>Carbohidratos ${fmt(ot.c, 1)} g</span><span>Grasa ${fmt(ot.g, 1)} g</span></div>
+        ${mac ? `<div class="pm-total"><span class="pm-tl">Aporte total</span><b>${fmt(ot.kcal)} kcal</b><span>Proteína ${fmt(ot.p, 1)} g</span><span>Carbohidratos ${fmt(ot.c, 1)} g</span><span>Grasa ${fmt(ot.g, 1)} g</span></div>` : ''}
         ${o.notes ? `<div class="pm-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`; }).join('')}</div>`).join('');
     return `<div class="pm-scheme" style="${schemeStyle(dayScheme(dt))}"><div class="pm-head"><div>${head ? `<div class="pm-eyebrow">${esc(head.eyebrow)}</div><h2 class="pd-h">${esc(head.title)}</h2>` : `<div class="pm-eyebrow">Minuta · ${esc(dt.name)}</div><h1>${esc(a.q.nombre || '')}</h1>`}</div>
-      <div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div></div>
+      ${mac ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>
       ${meals}${dt.notes ? `<div class="pm-notes pm-day"><b>Notas generales:</b><br>${esc(dt.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
   }
   // Minuta del tipo de día activo (botón del portal del cliente): también se descarga en PDF.
@@ -3516,6 +3561,8 @@
   const DOC_SECS = [['planif', 'Planificación'], ['cal', 'Calendario de alimentación'], ['min', 'Minuta ejemplo'], ['dist', 'Distribución de las comidas'], ['seg', 'Resumen del seguimiento semanal']];
   const docOff = (a) => (Array.isArray(a.ui.docOff) ? a.ui.docOff : (a.ui.docOff = []));
   const docOn = (a, k) => !docOff(a).includes(k);
+  // ¿La minuta y la distribución impresas muestran kcal y macros? Por defecto no: el atleta solo ve los alimentos.
+  const docMac = (a) => !!(a && a.ui && a.ui.docMacros);
   function docParts(a) {
     return DOC_SECS.flatMap(([k, l]) => (k === 'min' ? a.dayTypes.map((dt) => [`min:${dt.id}`, `Minuta · ${dt.name}`]) : [[k, l]]));
   }
@@ -3526,7 +3573,7 @@
     return DOC_SECS.filter(([k]) => (k === 'min' ? docMinDays(a).length > 0 : docOn(a, k))).map(([key, title]) => ({ key, title, n: ++n }));
   }
   function planDocBody(a, imgOf, sheets = false) {
-    const nl = (s) => esc(s).replace(/\n/g, '<br>');
+    const nl = (s) => esc(s).replace(/\n/g, '<br>'), mac = docMac(a);
     // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
     const ds = docStages(a);
     const planif = ds.length ? ds.map((x) => `<div class="pd-stage">
@@ -3543,7 +3590,7 @@
     // 3 · Minuta ejemplo de cada tipo de día
     const minutas = docMinDays(a).map((dt, i) => {
       const pm = minutaMeals(dt);
-      return `<div class="pd-day${i ? ' pd-break' : ''}">${pm.length
+      return `<div class="pd-day${i ? ' pd-break' : ''}" id="pd-min-${esc(dt.id)}">${pm.length
         ? minutaBody(a, dt, pm, imgOf, { eyebrow: 'Minuta ejemplo', title: dt.name })
         : `<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div></div><p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>`}</div>`;
     }).join('');
@@ -3551,12 +3598,12 @@
     const dist = a.dayTypes.map((dt) => {
       const t = dayTargets(a, dt);
       return `<div class="pd-day"><div class="pm-head"><div><div class="pm-eyebrow">Distribución de comidas</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
-        ${t.ok ? `<div class="pm-targets">Objetivo del día: <b>${fmt(t.kcal)} kcal</b><br>Proteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g</div>` : ''}</div>
+        ${t.ok && mac ? `<div class="pm-targets">Objetivo del día: <b>${fmt(t.kcal)} kcal</b><br>Proteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g</div>` : ''}</div>
         ${dt.meals.length ? `<table class="pd-dist"><thead><tr><th>#</th><th>Tiempo de comida</th><th>Hora</th><th>Comida de ejemplo</th><th>Indicaciones</th></tr></thead><tbody>
           ${dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = String((eo && eo.title) || '').trim();
             return `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${et || ef.length ? `${et ? `<b>${esc(et)}</b>` : ''}${ef.length ? `<div class="pd-ex">${ef.map(([fn, c]) => esc(c ? `${fn} (${c})` : fn)).join(' · ')}</div>` : ''}` : '<span class="pd-mute">—</span>'}</td><td>${String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`; }).join('')}
         </tbody></table>
-        <p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) })}</b></p>` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
+        ${mac ? `<p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) })}</b></p>` : ''}` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
     }).join('');
     const noteOf = (k) => String((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
     const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).map(([k, l]) => `<div class="pd-note"><b>${l}.</b> ${nl(noteOf(k))}</div>`).join('');
@@ -3577,29 +3624,34 @@
       </tbody></table></div>
       <p class="pd-foot">Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
       : '<p class="pd-empty">Aún no hay registros de seguimiento.</p>';
-    const sec = (n, title, html, brk = true) => `<section class="pd-sec${brk ? ' pd-break' : ''}"><div class="pd-sec-title"><span>${n}</span>${title}</div>${html}</section>`;
+    const sec = (n, title, html, brk = true, key = '') => `<section class="pd-sec${brk ? ' pd-break' : ''}"${key ? ` id="pd-sec-${key}"` : ''}><div class="pd-sec-title"><span>${n}</span>${title}${key ? '<a class="pd-back" href="#pd-indice">Volver al índice</a>' : ''}</div>${html}</section>`;
     const cover = `<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
         <div class="pd-meta">Generada el ${fmtDate(todayISO())}<br>${a.dayTypes.map((d) => esc(d.name)).join(' · ')}</div></header>`;
     const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n;
+    // Índice: los apartados que se imprimen y, dentro de la minuta, cada tipo de día.
+    const tocItems = secs.flatMap((x) => [{ k: x.key === 'min' ? `min:${(docMinDays(a)[0] || {}).id}` : x.key, id: `pd-sec-${x.key}`, n: x.n, label: x.title }]
+      .concat(x.key === 'min' ? docMinDays(a).map((dt) => ({ k: `min:${dt.id}`, id: `pd-min-${dt.id}`, sub: true, label: `Minuta · ${dt.name}` })) : []));
+    const tocHtml = (link) => `<nav class="pd-toc" id="pd-indice" aria-label="Índice"><h2 class="pd-toc-h">Índice</h2><p class="pd-toc-note">${sheets ? 'En el PDF, cada línea lleva el número de su hoja y te lleva a ella. Al pie de cada hoja, «Volver al índice» te trae de vuelta aquí.' : 'Toca un apartado para ir a él; «Volver al índice» te trae de vuelta aquí.'}</p>
+      <ol>${tocItems.map((e) => `<li${e.sub ? ' class="sub"' : ''}>${link(e, `${e.sub ? '' : `<span class="pd-toc-n">${e.n}</span>`}<span>${esc(e.label)}</span>`)}</li>`).join('')}</ol></nav>`;
     if (sheets) {
       // Vista previa hoja por hoja (vertical para Planificación, Calendario, Distribución y Seguimiento; horizontal para cada minuta).
       // Se ven todos los apartados; cada uno lleva su casilla «Imprimir». Los que no se imprimen quedan atenuados y sin número,
       // y la portada va en la primera hoja que sí se imprime, igual que en el PDF.
-      const parts = docParts(a), first = (parts.find(([k]) => docOn(a, k)) || parts[0])[0];
       const N = (k) => num(k) || '–';
       const pick = (k, label) => { const on = docOn(a, k);
         return `<label class="mn-pick no-print${on ? '' : ' off'}"><input type="checkbox" data-action="docPart" data-k="${esc(k)}" ${on ? 'checked' : ''} aria-label="Imprimir ${esc(label)}"><span class="box" aria-hidden="true"></span><b>${on ? 'Se imprime' : 'No se imprime'}</b><span class="mn-pick-l">${esc(label)}</span></label>`; };
       const part = (k, label, inner) => `<div class="mn-part${docOn(a, k) ? '' : ' is-off'}" data-part="${esc(k)}">${pick(k, label)}${inner}</div>`;
-      const sheet = (k, html) => `<div class="mn-paper mn-sheet">${k === first ? cover : ''}${html}</div>`;
+      const sheet = (k, html) => `<div class="mn-paper mn-sheet">${html}</div>`;
+      const front = `<div class="mn-paper mn-sheet mn-front">${cover}${secs.length ? tocHtml((e, inner) => `<button type="button" data-action="docJump" data-k="${esc(e.k)}">${inner}</button>`) : ''}</div>`;
       const minHead = (docMinDays(a)[0] || a.dayTypes[0] || {}).id;
       const land = a.dayTypes.map((dt) => {
         const k = `min:${dt.id}`, pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
-        const head = `${k === first ? cover : ''}${dt.id === minHead ? `<div class="pd-sec-title"><span>${N('min')}</span>Minuta ejemplo</div>` : ''}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
-          ${pm.length ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
-        const body = pm.length ? minutaGridHTML(dt, pm, imgOf) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
+        const head = `${dt.id === minHead ? `<div class="pd-sec-title"><span>${N('min')}</span>Minuta ejemplo</div>` : ''}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
+          ${pm.length && mac ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
+        const body = pm.length ? minutaGridHTML(dt, pm, imgOf, mac) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
         return part(k, `Minuta · ${dt.name}`, `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`);
       }).join('');
-      return part('planif', 'Planificación', sheet('planif', sec(N('planif'), 'Planificación', planif, false)))
+      return front + part('planif', 'Planificación', sheet('planif', sec(N('planif'), 'Planificación', planif, false)))
         + part('cal', 'Calendario de alimentación', sheet('cal', sec(N('cal'), 'Calendario de alimentación', calHtml, false)))
         + land
         + part('dist', 'Distribución de las comidas', sheet('dist', sec(N('dist'), 'Distribución de las comidas', dist + notes, false)))
@@ -3607,10 +3659,10 @@
     }
     // Documento para imprimir (respaldo en HTML si no se puede generar el PDF): solo los apartados marcados.
     const html = { planif, cal: calHtml, min: minutas, dist: dist + notes, seg };
-    return cover + secs.map((x, i) => sec(x.n, x.title, html[x.key], i > 0)).join('');
+    return cover + tocHtml((e, inner) => `<a href="#${esc(e.id)}">${inner}</a>`) + secs.map((x) => sec(x.n, x.title, html[x.key], true, x.key)).join('');
   }
   // Minuta horizontal en HTML para la vista previa: misma estructura que el PDF (fila por comida, columna por opción).
-  function minutaGridHTML(dt, pm, imgOf) {
+  function minutaGridHTML(dt, pm, imgOf, mac = true) {
     // Una sola cuadrícula: la columna de los tiempos de comida toma el ancho del título más largo y el resto queda para las opciones.
     const rows = pm.map(({ m, opts }, i) => {
       const cells = opts.map((o, k) => {
@@ -3619,7 +3671,7 @@
         return `<div class="mg-opt"><div class="mg-on">Opción ${k + 1}</div>${o.title ? `<div class="mg-dish">${esc(o.title)}</div>` : ''}
           ${img ? `<img class="mg-img" src="${img}" alt="">` : ''}
           <table class="mg-ft"><tbody>${foods}</tbody></table>
-          <div class="mg-tot">${fmt(ot.kcal)} kcal · P ${fmt(ot.p, 1)} g · C ${fmt(ot.c, 1)} g · G ${fmt(ot.g, 1)} g</div>
+          ${mac ? `<div class="mg-tot">${fmt(ot.kcal)} kcal · P ${fmt(ot.p, 1)} g · C ${fmt(ot.c, 1)} g · G ${fmt(ot.g, 1)} g</div>` : ''}
           ${o.notes ? `<div class="mg-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
       }).join('');
       return `<div class="mg-row"><div class="mg-meal"><b>${esc(String(m.name || '').trim() || `Comida ${i + 1}`)}</b>${m.time ? `<span>${esc(m.time)}</span>` : ''}</div>
@@ -3687,7 +3739,7 @@
     const rule = (w, c, mt, mb) => ({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: W, y2: 0, lineWidth: w, lineColor: c }], margin: [0, mt, 0, mb] });
     const head = (eyebrow, title, right) => ({ columns: [{ width: '*', stack: [{ text: eyebrow.toUpperCase(), style: 'eyebrow' }, { text: title, style: 'h2', margin: [0, 1, 0, 0] }] }, { width: 'auto', text: right || '', style: 'meta', alignment: 'right', margin: [0, 6, 0, 0] }], columnGap: 12 });
     const dayHead = (eyebrow, title, right) => [head(eyebrow, title, right), rule(1.2, '#111', 5, 8)];
-    const secTitle = (n, t, brk) => Object.assign({ table: { widths: [2, '*'], body: [[{ text: '', fillColor: BAR }, { text: `${n}    ${t.toUpperCase()}`, style: 'sec', fillColor: '#f3efe4', margin: [4, 3, 0, 3] }]] }, layout: 'noBorders', margin: [0, brk ? 0 : 14, 0, 12] }, brk ? { pageBreak: 'before' } : {});
+    const secTitle = (n, t, brk, id) => Object.assign({ table: { widths: [2, '*'], body: [[{ text: '', fillColor: BAR }, Object.assign({ text: `${n}    ${t.toUpperCase()}`, style: 'sec', fillColor: '#f3efe4', margin: [4, 3, 0, 3] }, id ? { id } : {})]] }, layout: 'noBorders', margin: [0, brk ? 0 : 14, 0, 12] }, brk ? { pageBreak: 'before' } : {});
     const lines = { hLineWidth: (i) => (i === 0 ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => '#e3e3e3', paddingLeft: () => 4, paddingRight: () => 4, paddingTop: () => 3, paddingBottom: () => 3 };
     const th = (t, al) => ({ text: t, style: 'th', fillColor: '#f3f3f3', alignment: al || 'left' });
     const box = (content, mt = 6) => ({ table: { widths: ['*'], body: [[Object.assign({ fillColor: '#faf6ec', margin: [3, 2, 3, 2] }, content)]] }, layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#e6d9b8', vLineColor: () => '#e6d9b8' }, margin: [0, mt, 0, 0] });
@@ -3734,7 +3786,7 @@
   // Ancho de la franja de tiempos de comida: el del título (u hora) más largo, para dejar el resto a las opciones.
   const mgMealW = (data, fs) => Math.round(Math.min(170, Math.max(52, Math.max(...data.map(({ m }) => Math.max(String(m.name || 'Comida 10').trim().length * (fs + 1.5) * 0.57, String(m.time || '').length * fs * 0.6))) + 14)));
   const mgOptW = (n, mw = MG.MW) => (PDF_LAND_W - mw - 4 - 2 * n) / n - 12;
-  function pdfMinutaGrid(kit, dt, data, fs, imgH) {
+  function pdfMinutaGrid(kit, dt, data, fs, imgH, mac = true) {
     const { str } = kit, sc = dayScheme(dt), MW = mgMealW(data, fs);
     const rows = data.map(({ m, opts }, i) => {
       const iw = Math.max(40, mgOptW(opts.length, MW));
@@ -3745,7 +3797,7 @@
         if (d.img && imgH) st.push({ image: d.img, fit: [iw, imgH], alignment: 'center', margin: [0, 4, 0, 0] });
         if (d.foods.length) st.push({ margin: [0, 4, 0, 0], table: { widths: ['*', 'auto'], body: d.foods.map(([nm, c]) => [{ text: nm, fontSize: fs }, { text: c || '—', bold: true, fontSize: fs, alignment: 'right', color: c ? '#111' : '#999' }]) },
           layout: { hLineWidth: (j, node) => (j === 0 || j === node.table.body.length ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => sc.line, paddingLeft: () => 1, paddingRight: () => 1, paddingTop: () => 1, paddingBottom: () => 1 } });
-        st.push({ text: `${fmt(d.ot.kcal)} kcal · P ${fmt(d.ot.p, 1)} g · C ${fmt(d.ot.c, 1)} g · G ${fmt(d.ot.g, 1)} g`, fontSize: fs - 0.5, bold: true, color: sc.ink, alignment: 'center', margin: [0, 3, 0, 0] });
+        if (mac) st.push({ text: `${fmt(d.ot.kcal)} kcal · P ${fmt(d.ot.p, 1)} g · C ${fmt(d.ot.c, 1)} g · G ${fmt(d.ot.g, 1)} g`, fontSize: fs - 0.5, bold: true, color: sc.ink, alignment: 'center', margin: [0, 3, 0, 0] });
         if (d.o.notes) st.push({ text: [{ text: 'Notas: ', bold: true }, str(d.o.notes)], fontSize: fs - 0.5, color: '#333', margin: [0, 2, 0, 0] });
         return { stack: st, fillColor: sc.soft };
       });
@@ -3777,24 +3829,27 @@
   }
 
   const landRule = (w, c, mt, mb) => ({ canvas: [{ type: 'line', x1: 0, y1: 0, x2: PDF_LAND_W, y2: 0, lineWidth: w, lineColor: c }], margin: [0, mt, 0, mb] });
-  // Documento A4 con pie de página (texto a la izquierda, número de hoja a la derecha).
-  const pdfDoc = (kit, title, footerText, content) => ({
+  // Documento A4 con pie de página (texto a la izquierda, número de hoja a la derecha). Con índice (idx), desde la 2.ª hoja
+  // el pie lleva al centro el enlace «Volver al índice».
+  const pdfDoc = (kit, title, footerText, content, idx = false) => ({
     pageSize: 'A4', pageMargins: [36, 40, 36, 46],
     info: { title, author: 'PrepCoach' },
-    footer: (cur, total) => ({ columns: [{ text: footerText, alignment: 'left' }, { text: `${cur} / ${total}`, alignment: 'right' }], fontSize: 7.5, color: '#888', margin: [36, 16, 36, 0] }),
+    footer: (cur, total) => ({ columns: [{ width: '*', text: footerText, alignment: 'left' }]
+      .concat(idx && cur > 1 ? [{ width: 'auto', text: 'Volver al índice', linkToDestination: 'indice', bold: true, fontSize: 9, color: kit.GOLD, decoration: 'underline', margin: [0, -1.5, 0, 0] }] : [])
+      .concat([{ width: '*', text: `${cur} / ${total}`, alignment: 'right' }]), columnGap: 12, fontSize: 7.5, color: '#888', margin: [36, 16, 36, 0] }),
     defaultStyle: { font: 'Roboto', fontSize: 9, color: '#111', lineHeight: 1.15 },
     styles: { eyebrow: { fontSize: 7, bold: true, color: kit.GOLD, characterSpacing: 0.5 }, h1: { fontSize: 21, bold: true }, h2: { fontSize: 14, bold: true }, h3: { fontSize: 10.5, bold: true }, meta: { fontSize: 8, color: '#333' }, sec: { fontSize: 10, bold: true, characterSpacing: 0.8 }, th: { fontSize: 7.5, bold: true } },
     content,
   });
   // Minuta de un solo tipo de día (la que descarga el cliente desde su portal).
   async function minutaPdfDef(a, dt, pm, imgOf) {
-    const kit = pdfKit(), name = a.q.nombre || 'Atleta', t = dayTargets(a, dt), tot = dayTotals(dt), data = minutaGridData(kit, pm, imgOf);
+    const kit = pdfKit(), name = a.q.nombre || 'Atleta', t = dayTargets(a, dt), tot = dayTotals(dt), data = minutaGridData(kit, pm, imgOf), mac = docMac(a);
     const head = () => [
       { columns: [{ width: '*', stack: [{ text: `MINUTA · ${kit.str(dt.name)}`.toUpperCase(), style: 'eyebrow', color: dayScheme(dt).ink }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] },
-        { width: 'auto', text: `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 },
+        { width: 'auto', text: mac ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '', style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 },
       landRule(2.5, dayScheme(dt).c, 5, 8)];
-    const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => head().concat(pdfMinutaGrid(kit, dt, data, f, h)));
-    return Object.assign(pdfDoc(kit, `Minuta ${dt.name} · ${name}`, `Minuta ${dt.name} · ${name}`, head().concat(pdfMinutaGrid(kit, dt, data, fs, ih))), { pageOrientation: 'landscape' });
+    const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => head().concat(pdfMinutaGrid(kit, dt, data, f, h, mac)));
+    return Object.assign(pdfDoc(kit, `Minuta ${dt.name} · ${name}`, `Minuta ${dt.name} · ${name}`, head().concat(pdfMinutaGrid(kit, dt, data, fs, ih, mac))), { pageOrientation: 'landscape' });
   }
   // Mismo contenido y orden que la vista previa (planDocBody), descrito para pdfmake.
   async function planPdfDef(a, imgOf) {
@@ -3829,14 +3884,15 @@
     } else calPdf.push(empty('Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'));
 
     // Apartados que se imprimen (marcados en la vista previa), numerados de nuevo; la portada va con el primero.
-    const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n, minFirst = secs.length && secs[0].key === 'min';
+    const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n, mac = docMac(a);
     const coverNodes = () => [{ columns: [{ width: '*', stack: [{ text: 'PLANIFICACIÓN NUTRICIONAL', style: 'eyebrow' }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] }, { width: 'auto', text: `Generada el ${fmtDate(todayISO())}\n${a.dayTypes.map((d) => str(d.name)).join(' · ')}`, style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 }, rule(2, '#111', 6, 0)];
     // 3 · Minuta ejemplo de cada tipo de día (solo las marcadas)
     const minutas = [], minDays = docMinDays(a);
     for (let di = 0; di < minDays.length; di++) {
       const dt = minDays[di];
       const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
-      const hd = dayHead('Minuta ejemplo', dt.name, pm.length ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
+      const hd = dayHead('Minuta ejemplo', dt.name, pm.length && mac ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
+      hd[0].columns[0].stack[1].id = `min-${dt.id}`; // destino del índice
       // Cada minuta ocupa su propia hoja horizontal (la primera comparte hoja con el título de la sección).
       if (di) { hd[0].pageBreak = 'before'; hd[0].pageOrientation = 'landscape'; }
       const dsc = dayScheme(dt); hd[0].columns[0].stack[0].color = dsc.ink; hd[1] = landRule(2.5, dsc.c, 5, 8);
@@ -3844,21 +3900,21 @@
       if (!pm.length) { minutas.push(empty('Este tipo de día aún no tiene opciones con alimentos en el Menú diario.')); continue; }
       const data = minutaGridData(kit, pm, imgOf);
       // Para medir, la hoja se arma igual que en el documento (la primera minuta lleva además el título de la sección).
-      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(num('min'), 'Minuta ejemplo', true); delete st.pageBreak; return (minFirst ? coverNodes() : []).concat([st], h); };
-      const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => testHead().concat(pdfMinutaGrid(kit, dt, data, f, h)));
-      minutas.push(...pdfMinutaGrid(kit, dt, data, fs, ih));
+      const testHead = () => { const h = dayHead('Minuta ejemplo', dt.name, hd[0].columns[1].text); h[0].columns[0].stack[0].color = dsc.ink; h[1] = landRule(2.5, dsc.c, 5, 8); if (di) return h; const st = secTitle(num('min'), 'Minuta ejemplo', true); delete st.pageBreak; return [st].concat(h); };
+      const [fs, ih] = await fitMinutaPage(kit, data, (f, h) => testHead().concat(pdfMinutaGrid(kit, dt, data, f, h, mac)));
+      minutas.push(...pdfMinutaGrid(kit, dt, data, fs, ih, mac));
     }
 
     // 4 · Distribución de las comidas
     const dist = [];
     a.dayTypes.forEach((dt) => {
       const t = dayTargets(a, dt);
-      dist.push({ unbreakable: dt.meals.length <= 12, margin: [0, 0, 0, 16], stack: dayHead('Distribución de comidas', dt.name, t.ok ? `Objetivo del día: ${fmt(t.kcal)} kcal\nProteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g` : '').concat(dt.meals.length
+      dist.push({ unbreakable: dt.meals.length <= 12, margin: [0, 0, 0, 16], stack: dayHead('Distribución de comidas', dt.name, t.ok && mac ? `Objetivo del día: ${fmt(t.kcal)} kcal\nProteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g` : '').concat(dt.meals.length
         ? [{ table: { headerRows: 1, widths: [16, 84, 30, 180, '*'], body: [[th('#'), th('Tiempo de comida'), th('Hora'), th('Comida de ejemplo'), th('Indicaciones')]].concat(dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = str(eo && eo.title).trim();
             return [{ text: pad(i + 1), color: '#666' }, { text: str(m.name) || `Comida ${i + 1}`, bold: true }, str(m.time) || '—',
               et || ef.length ? { stack: [].concat(et ? [{ text: et, bold: true }] : [], ef.length ? [{ text: ef.map(([fn, c]) => (c ? `${fn} (${c})` : fn)).join(' · '), fontSize: 7.5, color: '#444', margin: [0, 1, 0, 0] }] : []) } : { text: '—', color: '#999' },
-              str(m.indic).trim() ? str(m.indic).trim() : { text: '—', color: '#999' }]; })) }, layout: Object.assign({}, lines, { paddingTop: () => 4, paddingBottom: () => 4 }), fontSize: 8.5 },
-          { text: [{ text: 'Día de ejemplo: ' }, { text: optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) }), bold: true }], fontSize: 8, color: '#444', margin: [0, 5, 0, 0] }]
+              str(m.indic).trim() ? str(m.indic).trim() : { text: '—', color: '#999' }]; })) }, layout: Object.assign({}, lines, { paddingTop: () => 4, paddingBottom: () => 4 }), fontSize: 8.5 }]
+          .concat(mac ? [{ text: [{ text: 'Día de ejemplo: ' }, { text: optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) }), bold: true }], fontSize: 8, color: '#444', margin: [0, 5, 0, 0] }] : [])
         : [empty('Este tipo de día aún no tiene comidas.')]) });
     });
     const noteOf = (k) => str((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
@@ -3882,12 +3938,23 @@
       { text: 'Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
     ] : [empty('Aún no hay registros de seguimiento.')];
 
-    // Cada apartado parte en hoja nueva (salvo el primero, que va con la portada): horizontal la minuta, vertical los demás.
-    const nodes = { planif, cal: calPdf, min: minutas, dist, seg }, content = coverNodes();
-    secs.forEach((x, i) => { const st = secTitle(x.n, x.title, i > 0); if (i > 0) st.pageOrientation = x.key === 'min' ? 'landscape' : 'portrait'; content.push(st, ...nodes[x.key]); });
-    const doc = pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, content);
-    if (minFirst) doc.pageOrientation = 'landscape';
-    return doc;
+    // Primera hoja: portada e índice. Cada línea del índice lleva a su apartado (y, en la minuta, a cada tipo de día),
+    // con el número de hoja; al pie de cada hoja, «Volver al índice» regresa aquí.
+    const toc = secs.flatMap((x) => [{ id: `sec-${x.key}`, n: x.n, label: x.title }]
+      .concat(x.key === 'min' ? minDays.map((dt) => ({ id: `min-${dt.id}`, sub: true, label: `Minuta · ${dt.name}` })) : []));
+    const tocNodes = [
+      { text: 'Índice', id: 'indice', style: 'h2', margin: [0, 26, 0, 3] },
+      { text: 'Toca un apartado para ir a él. Al pie de cada hoja, «Volver al índice» te trae de vuelta aquí.', fontSize: 8.5, color: '#666', margin: [0, 0, 0, 10] },
+      { table: { widths: [20, '*', 'auto'], body: toc.map((e) => [
+          { text: e.sub ? '' : String(e.n), linkToDestination: e.id, bold: true, color: kit.GOLD },
+          { text: e.label, linkToDestination: e.id, bold: !e.sub, color: e.sub ? '#333' : '#111', fontSize: e.sub ? 10 : 11, margin: [e.sub ? 14 : 0, 0, 0, 0] },
+          { pageReference: e.id, alignment: 'right', color: '#555' }]) },
+        layout: { hLineWidth: (i, node) => (i === 0 || i === node.table.body.length ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => '#e3e3e3', paddingLeft: () => 2, paddingRight: () => 2, paddingTop: () => 7, paddingBottom: () => 7 }, fontSize: 11 },
+    ];
+    // Cada apartado parte en hoja nueva: horizontal la minuta, vertical los demás.
+    const nodes = { planif, cal: calPdf, min: minutas, dist, seg }, content = coverNodes().concat(tocNodes);
+    secs.forEach((x) => { const st = secTitle(x.n, x.title, true, `sec-${x.key}`); st.pageOrientation = x.key === 'min' ? 'landscape' : 'portrait'; content.push(st, ...nodes[x.key]); });
+    return pdfDoc(kit, `Planificación · ${name}`, `Planificación nutricional · ${name}`, content, true);
   }
   // Genera un PDF y lo entrega. Si no se puede generar (sin conexión o generador bloqueado), entrega la versión HTML con fallback().
   async function savePdf({ base, images, build, okMsg, failMsg, fallback }) {
@@ -4290,11 +4357,28 @@
       if (!got.length) { toast('La calculadora aún no tiene resultados: completa Plan › Requerimientos.'); return; }
       const apply = () => {
         if (!isPlain(s.reqs)) s.reqs = {};
-        got.forEach(([dt, t]) => { s.reqs[dt.id] = roundReq(t); });
+        const r2 = (v) => Math.round(v * 100) / 100;
+        got.forEach(([dt, t]) => { s.reqs[dt.id] = Object.assign(roundReq(t), s.macroMode === 'gkg' && t.peso ? { pk: r2(t.p / t.peso), ck: r2(t.c / t.peso), gk: r2(t.g / t.peso) } : {}); });
         closeModal(); toast(`Requerimientos traídos a E${i + 1} «${s.tipo}».`); commit();
       };
       if (stageHasReqs(a, s)) confirmModal('Traer requerimientos', `Se reemplazarán los requerimientos anotados en <b>E${i + 1} «${esc(s.tipo)}»</b> por los de la calculadora:<br>${got.map(([dt, t]) => `<b>${esc(dt.name)}</b>: ${calcLine(t)}`).join('<br>')}`, apply, 'Reemplazar');
       else apply();
+    },
+    // Macros de la etapa en gramos totales o en g/kg: al cambiar, los valores anotados se convierten con el peso de referencia.
+    setMacroMode(el) {
+      const a = A(), s = stagesOf(a)[+el.dataset.i], v = el.dataset.v === 'gkg' ? 'gkg' : 'g'; if (!s || (s.macroMode === 'gkg' ? 'gkg' : 'g') === v) return;
+      const peso = stageRefPeso(a, s).v, r2 = (x) => Math.round(x * 100) / 100;
+      if (!isPlain(s.reqs)) s.reqs = {};
+      a.dayTypes.forEach((dt) => {
+        const r = isPlain(s.reqs[dt.id]) ? s.reqs[dt.id] : (s.reqs[dt.id] = {});
+        if (v === 'gkg') { if (peso) [['p', 'pk'], ['c', 'ck'], ['g', 'gk']].forEach(([f, k]) => { const x = num(r[f]); if (x != null) r[k] = r2(x / peso); }); return; }
+        const t = stageTargets(a, s, dt);
+        ['p', 'c', 'g'].forEach((f) => { if (t[f] != null) r[f] = Math.round(t[f]); });
+        if (t.ok) r.kcal = r.p * 4 + r.c * 4 + r.g * 9;
+      });
+      s.macroMode = v;
+      if (v === 'gkg' && !peso) toast('Falta el peso de referencia: anota el peso inicial de la etapa para calcular los gramos.');
+      commit();
     },
     // Etapas del proceso (Plan › Planificación › Configuración del proceso)
     addStage(el) {
@@ -4414,6 +4498,8 @@
       a.ui.docOff = off.includes(k) ? off.filter((x) => x !== k) : off.concat(k);
       save(); render();
     },
+    docMacros() { const a = A(); a.ui.docMacros = !docMac(a); save(); render(); },
+    docJump(el) { const t = document.querySelector(`.mn-part[data-part="${CSS.escape(el.dataset.k)}"]`); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
     docAll(el) { const a = A(); a.ui.docOff = el.dataset.v === '1' ? [] : docParts(a).map(([k]) => k); save(); render(); },
 
     trackTab(el) {
