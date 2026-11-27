@@ -3485,7 +3485,6 @@
     .pd-empty{font-size:11.5px;color:#666;font-style:italic;margin:0 0 6px}.pd-mute{color:#999}
     .pd-dist{table-layout:fixed}.pd-dist th,.pd-dist td{text-align:left;vertical-align:top;padding:5px 6px;overflow-wrap:anywhere}.pd-dist th:first-child{width:30px}.pd-dist th:nth-child(2){width:17%}.pd-dist th:nth-child(3){width:52px}.pd-dist th:nth-child(4){width:36%}.pd-ex{font-size:10.5px;color:#444;margin-top:2px}.pd-dist td:first-child{color:#666}.pd-dist td:nth-child(3){white-space:nowrap}
     .pd-note{font-size:11.5px;color:#222;border:1px solid #e6d9b8;background:#faf6ec;border-radius:4px;padding:8px 10px;margin-top:8px;break-inside:avoid;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .pd-stats{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:11.5px;margin-bottom:10px}
     .pd-scroll{overflow-x:auto}.pd-wk{min-width:600px;font-size:10px}.pd-wk th,.pd-wk td{padding:3px 4px}.pd-wk th{vertical-align:bottom}.pd-wk td{white-space:nowrap}.pd-wk th:nth-child(3),.pd-wk td:nth-child(3){text-align:left}
     .pd-pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;background:#eee;color:#555;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-pill.ok{background:#e0f3e8;color:#17663f}.pd-pill.warn{background:#fdefd6;color:#8a5200}.pd-pill.bad{background:#fbe2e2;color:#a12626}.pd-pill.slow{background:#e3eefc;color:#1f5aa6}
@@ -3499,7 +3498,11 @@
     .pd-stage{margin-bottom:16px;break-inside:avoid}.pd-stage-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border-bottom:1.5px solid #d8b15f;padding-bottom:5px;margin-bottom:6px}
     .pd-stage-h b{font-size:15px}.pd-stage-h span:last-child{margin-left:auto;font-size:11.5px;color:#333}
     .pd-stage-n{display:inline-grid;place-items:center;min-width:24px;height:20px;border-radius:4px;background:#111;color:#fff;font-size:10.5px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    .pd-stage-meta{display:flex;flex-wrap:wrap;gap:3px 16px;font-size:11px;color:#444;margin-bottom:6px}
+    .pd-info{width:100%;table-layout:fixed;border-collapse:collapse;margin:6px 0 4px;font-size:11.5px;break-inside:avoid}
+    .pd-info th,.pd-info td{border:1px solid #e0d6bd;padding:5px 8px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+    .pd-info th{background:#f6f1e4;color:#8a6a1f;font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .pd-info td{font-weight:600;color:#111}.pd-info .r{text-align:right;font-variant-numeric:tabular-nums}
+    .pd-stage .pd-scroll+.pd-scroll .pd-info{margin-top:0}.pd-stage .pd-goals,.pd-stage .pd-empty{margin-top:8px}
     .pd-cal-legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:11.5px;margin-bottom:12px}.pd-cal-legend span{display:inline-flex;align-items:center;gap:6px}
     .pd-cal-legend i{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:3px;font-style:normal;font-size:9px;font-weight:700;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     .pd-cal{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px 16px}
@@ -3581,19 +3584,41 @@
     const dias = (arr) => (arr || []).slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ');
     return stagesOf(a).map((s, i) => ({ s, n: i + 1, objs: (s.objetivos || []).map((x) => String(x || '').trim()).filter(Boolean) }))
       .filter((x) => x.s.tipo && (stageDated(x.s) || x.objs.length)).map((x) => {
-        const s = x.s, meta = [];
-        (a.dayTypes || []).forEach((dt) => { const t = stageTargets(a, s, dt); if (t.ok) meta.push([`Requerimientos · ${dt.name}`, calcLine(t)]); });
+        const s = x.s, reqs = [], info = [];
+        (a.dayTypes || []).forEach((dt) => { const t = stageTargets(a, s, dt); if (t.ok) reqs.push([dt.name, t]); });
         if (stageFull(s)) {
-          const ot = stageObjTxt(s); if (ot) meta.push(['Objetivo', ot]);
-          if (num(s.pesoInicial) != null) meta.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
-          if (num(s.grasaInicial) != null) meta.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
-          if (num(s.pasos) != null) meta.push(['Meta de pasos', fmt(num(s.pasos))]);
-          if ((s.diasEntreno || []).length) meta.push(['Entrenamiento', dias(s.diasEntreno)]);
-          if ((s.diasPeso || []).length) meta.push(['Pesaje', dias(s.diasPeso)]);
+          const ot = stageObjTxt(s); if (ot) info.push(['Objetivo', ot]);
+          if (num(s.pesoInicial) != null) info.push(['Peso inicial', `${fmt(num(s.pesoInicial), 1)} kg`]);
+          if (num(s.grasaInicial) != null) info.push(['% de grasa inicial', `${fmt(num(s.grasaInicial), 1)} %`]);
+          if (num(s.pasos) != null) info.push(['Meta de pasos', fmt(num(s.pasos))]);
+          if ((s.diasEntreno || []).length) info.push(['Entrenamiento', dias(s.diasEntreno)]);
+          if ((s.diasPeso || []).length) info.push(['Pesaje', dias(s.diasPeso)]);
         }
-        return Object.assign(x, { range: stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas', meta });
+        return Object.assign(x, { range: stageDated(s) ? `${fmtDate(s.inicio)} – ${fmtDate(s.fin)} · ${stageDur(s)}` : 'Sin fechas', reqs, info });
       });
   }
+  // Tablas de los datos que van bajo los títulos del documento (vista previa y PDF): { head, rows, right }.
+  // right: columnas alineadas a la derecha. Todas las columnas tienen el mismo ancho.
+  // Requerimientos de una etapa: una fila por tipo de día.
+  const reqTable = (x) => (x.reqs.length ? { head: ['Requerimientos', 'Calorías', 'Proteínas', 'Carbohidratos', 'Grasas'], right: [0, 1, 1, 1, 1],
+    rows: x.reqs.map(([n, t]) => [n, `${fmt(t.kcal)} kcal`, `${fmt(t.p)} g`, `${fmt(t.c)} g`, `${fmt(t.g)} g`]) } : null);
+  // Datos sueltos (peso inicial, días…): una columna por dato, con su nombre arriba.
+  const kvTable = (kv) => (kv.length ? { head: kv.map(([l]) => l), rows: [kv.map(([, v]) => v)] } : null);
+  // Tablas de una etapa: requerimientos, el objetivo (a todo el ancho, porque es un texto largo) y los demás datos.
+  const stageTables = (x) => [reqTable(x), kvTable(x.info.filter(([l]) => l === 'Objetivo')), kvTable(x.info.filter(([l]) => l !== 'Objetivo'))].filter(Boolean);
+  // Resumen del seguimiento semanal: inicio, semana actual, peso inicial, último promedio y cambio total.
+  function docSegInfo(a) {
+    const cw = currentWeek(a), cfg = cfgOf(a), ks = Array.from({ length: cw + 1 }, (_, k) => k);
+    const withAvg = ks.filter((k) => weekAvg(a, k) != null), p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
+    const out = [['Inicio', fmtDate(cfg.inicio)], ['Semana actual', `${weekEtapa(a, cw)} · ${posTxt(a, cw)}`]];
+    if (p0 != null) out.push(['Peso inicial', `${fmt(p0, 2)} kg`]);
+    if (pL != null && kLast > 0) out.push([`Último promedio (${weekName(a, kLast)})`, `${fmt(pL, 2)} kg`]);
+    if (p0 && pL != null && kLast > 0) out.push(['Cambio total', `${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)`]);
+    return out;
+  }
+  // Tabla de datos en HTML (vista previa del documento).
+  const infoTableHtml = (tb) => (!tb ? '' : `<div class="pd-scroll"><table class="pd-info"><thead><tr>${tb.head.map((h, i) => `<th class="${tb.right && tb.right[i] ? 'r' : ''}">${esc(h)}</th>`).join('')}</tr></thead>
+    <tbody>${tb.rows.map((r) => `<tr>${r.map((v, i) => `<td class="${tb.right && tb.right[i] ? 'r' : ''}">${esc(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
   // ---- Apartados del documento: el coach elige cuáles se imprimen (a.ui.docOff = claves que no van) ----
   // Cada minuta (una por tipo de día) es un apartado propio; en el documento van juntas bajo «Minuta ejemplo».
   const DOC_SECS = [['planif', 'Planificación'], ['cal', 'Calendario de alimentación'], ['min', 'Minuta ejemplo'], ['dist', 'Distribución de las comidas'], ['seg', 'Resumen del seguimiento semanal']];
@@ -3616,7 +3641,7 @@
     const ds = docStages(a);
     const planif = ds.length ? ds.map((x) => `<div class="pd-stage">
         <div class="pd-stage-h"><span class="pd-stage-n">E${x.n}</span><b>${esc(x.s.tipo)}</b><span>${x.range}</span></div>
-        ${x.meta.length ? `<div class="pd-stage-meta">${x.meta.map(([l, v]) => `<span>${l}: <b>${esc(v)}</b></span>`).join('')}</div>` : ''}
+        ${stageTables(x).map(infoTableHtml).join('')}
         ${x.objs.length ? `<ol class="pd-goals">${x.objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Sin objetivos definidos para esta etapa.</p>'}
       </div>`).join('') : '<p class="pd-empty">Aún no se han definido etapas en Plan › Planificación.</p>';
     // 2 · Calendario de alimentación: los meses con días asignados
@@ -3650,12 +3675,7 @@
     const withAvg = ks.filter((k) => weekAvg(a, k) != null), any = withAvg.some((k) => weekWeights(a, k).length) || ks.some((k) => weekSteps(a, k) != null || SCALES.some(([f]) => weekField(a, k, f).avg != null));
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
     const sc = (k, f) => { const v = weekField(a, k, f).avg; return v != null ? fmt(v, 1) : '—'; };
-    const seg = any ? `<div class="pd-stats">
-        <span>Inicio: <b>${fmtDate(cfg.inicio)}</b></span><span>Semana actual: <b>${esc(weekEtapa(a, cw))} · ${esc(posTxt(a, cw))}</b></span>
-        ${p0 != null ? `<span>Peso inicial: <b>${fmt(p0, 2)} kg</b></span>` : ''}
-        ${pL != null && kLast > 0 ? `<span>Último promedio (${esc(weekName(a, kLast))}): <b>${fmt(pL, 2)} kg</b></span>` : ''}
-        ${p0 && pL != null && kLast > 0 ? `<span>Cambio total: <b>${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)</b></span>` : ''}
-      </div>
+    const seg = any ? `${infoTableHtml(kvTable(docSegInfo(a)))}
       <div class="pd-scroll"><table class="pd-wk"><thead><tr><th>Semana</th><th>Inicio</th><th>Etapa</th><th>Peso (kg)</th><th>Meta</th><th>% logrado</th><th>Estado</th><th>Pasos</th>${SCALES.map(([, l]) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
         ${ks.map((k) => { const avg = weekAvg(a, k), b = buscado(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
           return `<tr><td><b>${esc(weekLabel(a, k))}</b></td><td>${fmtDate(weekStart(a, k), true)}</td><td>${esc(weekEtapa(a, k))}</td><td>${avg != null ? fmt(avg, 2) : '—'}</td><td>${isBase(a, k) ? '' : metaTxt(a, k)}</td><td>${l != null ? fmtS(l) + '%' : '—'}</td><td><span class="pd-pill ${st.key}">${esc(st.label)}</span></td><td>${steps != null ? fmt(steps) : '—'}</td>${SCALES.map(([f]) => `<td>${sc(k, f)}</td>`).join('')}</tr>`; }).join('')}
@@ -3892,13 +3912,19 @@
   // Mismo contenido y orden que la vista previa (planDocBody), descrito para pdfmake.
   async function planPdfDef(a, imgOf) {
     const kit = pdfKit(), { W, str, rule, dayHead, secTitle, lines, th, box, empty } = kit, name = a.q.nombre || 'Atleta';
+    // Tabla de datos bajo un título (misma estructura que infoTableHtml): nombres arriba, valores abajo.
+    const LINE = '#e0d6bd', infoTable = (tb, mt = 5) => (!tb ? { text: '' } : { margin: [0, mt, 0, 0], table: { headerRows: 1, dontBreakRows: true,
+      widths: tb.head.map(() => '*'),
+      body: [tb.head.map((h, i) => ({ text: str(h).toUpperCase(), fontSize: 6.8, bold: true, color: '#8a6a1f', characterSpacing: 0.3, fillColor: '#f6f1e4', alignment: tb.right && tb.right[i] ? 'right' : 'left' }))]
+        .concat(tb.rows.map((r) => r.map((v, i) => ({ text: str(v), fontSize: 8.5, bold: true, alignment: tb.right && tb.right[i] ? 'right' : 'left' })))) },
+      layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => LINE, vLineColor: () => LINE, paddingLeft: () => 5, paddingRight: () => 5, paddingTop: () => 3, paddingBottom: () => 3 } });
 
     // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
     const ds = docStages(a);
     const planif = ds.length ? ds.map((x) => ({ unbreakable: x.objs.length <= 12, margin: [0, 0, 0, 12], stack: [
       { table: { widths: [22, 'auto', '*'], body: [[{ text: `E${x.n}`, bold: true, color: '#fff', fillColor: '#111', alignment: 'center', fontSize: 9 }, { text: str(x.s.tipo), bold: true, fontSize: 11 }, { text: x.range, alignment: 'right', color: '#333', fontSize: 9, margin: [0, 1, 0, 0] }]] },
         layout: { hLineWidth: (k) => (k === 1 ? 1 : 0), vLineWidth: () => 0, hLineColor: () => '#d8b15f', paddingLeft: (k) => (k ? 6 : 3), paddingRight: () => 3, paddingTop: () => 3, paddingBottom: () => 3 } },
-      x.meta.length ? { text: [].concat(...x.meta.map(([l, v]) => [{ text: `${l}: `, color: '#555' }, { text: `${v}      `, bold: true }])), fontSize: 8.5, margin: [0, 5, 0, 2] } : { text: '' },
+      ...stageTables(x).map((tb, i) => infoTable(tb, i ? 4 : 6)),
       x.objs.length ? { ol: x.objs.map((o) => ({ text: o, margin: [0, 0, 0, 3] })), margin: [4, 5, 0, 0], fontSize: 9.5 } : empty('Sin objetivos definidos para esta etapa.'),
     ] })) : [empty('Aún no se han definido etapas en Plan › Planificación.')];
 
@@ -3964,9 +3990,8 @@
     const p0 = weekAvg(a, 0), kLast = withAvg.length ? withAvg[withAvg.length - 1] : null, pL = kLast != null ? weekAvg(a, kLast) : null;
     const PILL = { ok: ['#17663f', '#e0f3e8'], warn: ['#8a5200', '#fdefd6'], bad: ['#a12626', '#fbe2e2'], slow: ['#1f5aa6', '#e3eefc'], none: ['#555', '#eeeeee'] };
     const r = (t) => ({ text: t, alignment: 'right' });
-    const stat = (l, v) => [{ text: l + ': ' }, { text: v + '      ', bold: true }];
     const seg = any ? [
-      { text: [].concat(stat('Inicio', fmtDate(cfg.inicio)), stat('Semana actual', `${weekEtapa(a, cw)} · ${posTxt(a, cw)}`), p0 != null ? stat('Peso inicial', `${fmt(p0, 2)} kg`) : [], pL != null && kLast > 0 ? stat(`Último promedio (${weekName(a, kLast)})`, `${fmt(pL, 2)} kg`) : [], p0 && pL != null && kLast > 0 ? stat('Cambio total', `${fmtS(pL - p0, 2)} kg (${fmtS(((pL - p0) / p0) * 100, 1)}%)`) : []), fontSize: 8.5, margin: [0, 0, 0, 8] },
+      Object.assign(infoTable(kvTable(docSegInfo(a)), 0), { margin: [0, 0, 0, 10] }),
       { table: { headerRows: 1, widths: [38, 22, '*', 28, 34, 34, 46, 26, 40, 24, 24, 34, 32],
         body: [[th('Semana'), th('Inicio'), th('Etapa'), th('Peso (kg)', 'right'), th('Meta', 'right'), th('% logrado', 'right'), th('Estado', 'center'), th('Pasos', 'right')].concat(SCALES.map(([, l]) => th(l, 'right')))].concat(ks.map((k) => {
           const avg = weekAvg(a, k), b = buscado(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k), pc = PILL[st.key] || PILL.none;
