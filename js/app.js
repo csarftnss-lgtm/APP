@@ -1136,14 +1136,28 @@
   function weekAvg(a, k) { const w = weekWeights(a, k); if (w.length) return mean(w); return isBase(a, k) ? pesoInicial(a) : null; }
   // Pesajes mínimos para evaluar una semana (y cada bloque de la media de 7 días): 3, o los días de pesaje de la etapa si son menos.
   const minWeighs = (s) => { const n = ((s && s.diasPeso) || []).length; return n ? Math.min(3, n) : 3; };
+  // Bloque de 7 días con pesajes más cercano antes de la fecha d0, desde el bloque «from» y hasta 4 semanas atrás.
+  // gap = semanas entre ese bloque y el que empieza en d0 (1 = los 7 días justo anteriores).
+  function prevBlock(a, d0, from = 1) {
+    for (let g = from; g <= 4; g++) { const v = weightsIn(a, addDays(d0, -7 * g), addDays(d0, -7 * g + 6)); if (v.length) return { avg: mean(v), n: v.length, gap: g }; }
+    return null;
+  }
+  // % de cambio por semana entre dos promedios separados por gap semanas.
+  const weeklyPct = (cur, prev, gap = 1) => (gap > 1 ? Math.pow(cur / prev, 1 / gap) - 1 : (cur - prev) / prev) * 100;
   // Promedio con el que se compara una semana: el de los 7 días anteriores a su inicio (la semana anterior de la etapa o,
-  // en la semana 1, la semana previa a la etapa). Si ahí no hay pesajes, la semana 1 usa el peso inicial de la etapa.
-  function prevAvg(a, k) {
+  // en la semana 1, la semana previa a la etapa). Si ahí no hay pesajes, la semana 1 usa el peso inicial de la etapa y las
+  // demás, el bloque de 7 días con pesajes más cercano (hasta 4 semanas atrás; gap > 1, el cambio se lleva a por semana).
+  function prevInfo(a, k) {
     if (isBase(a, k)) return null;
-    const w = wkOf(a, k); if (w.legacy) return weekAvg(a, k - 1);
-    const v = weightsIn(a, addDays(w.start, -7), addDays(w.start, -1));
-    if (v.length) return mean(v);
-    return w.s && w.j === 0 ? num(w.s.pesoInicial) : null;
+    const w = wkOf(a, k);
+    if (w.legacy) { const v = weekAvg(a, k - 1); if (v != null) return { v, n: weekWeights(a, k - 1).length || null, gap: 1 }; }
+    else {
+      const v = weightsIn(a, addDays(w.start, -7), addDays(w.start, -1));
+      if (v.length) return { v: mean(v), n: v.length, gap: 1 };
+      if (w.s && w.j === 0 && num(w.s.pesoInicial) != null) return { v: num(w.s.pesoInicial), n: null, gap: 1 };
+    }
+    const pb = prevBlock(a, w.start, 2);
+    return pb ? { v: pb.avg, n: pb.n, gap: pb.gap } : null;
   }
   // ---- Meta semanal ----
   // Etapas de pérdida: rango de pérdida semanal (bajo el rango = lento, dentro = adecuado, sobre el rango = rápido).
@@ -1184,11 +1198,27 @@
   }
   // Meta de la semana como texto: «0,5 – 1 %» (rango de pérdida) o el % buscado con signo.
   function metaTxt(a, k) { const r = weekRange(a, k); if (r) return rangeTxt(r); const b = buscado(a, k); return b != null ? fmtS(b) + '%' : '—'; }
-  // % de cambio de la semana: su promedio frente al de los 7 días anteriores.
-  function logrado(a, k) {
+  // % de cambio de la semana: su promedio frente al de los 7 días anteriores. Con menos pesajes de los necesarios (o sin
+  // pesajes en los 7 días anteriores) se calcula igual con los que hay y queda marcado como parcial.
+  function logradoInfo(a, k) {
     if (isBase(a, k)) return null;
-    const v = weekWeights(a, k), cur = v.length ? mean(v) : null, prev = prevAvg(a, k);
-    return cur != null && prev ? ((cur - prev) / prev) * 100 : null;
+    const v = weekWeights(a, k), p = prevInfo(a, k);
+    if (!v.length || !p || !p.v) return null;
+    const m = minWeighs(wkOf(a, k).s), few = v.length < m;
+    return { pct: weeklyPct(mean(v), p.v, p.gap), n: v.length, m, gap: p.gap, few, partial: few || p.gap > 1 };
+  }
+  function logrado(a, k) { const x = logradoInfo(a, k); return x ? x.pct : null; }
+  // Qué falta en un % parcial, para el aviso: «2 de 3 pesajes en la semana; …».
+  function partialWhy(x) {
+    const out = [];
+    if (x.few) out.push(`hay ${x.n} de ${x.m} pesajes en la semana`);
+    if (x.gap > 1) out.push(`no hay pesajes en los 7 días anteriores, así que se comparó con el promedio de hace ${x.gap} semanas, llevado a cambio por semana`);
+    return out.join('; ');
+  }
+  // Marca visible junto a un % parcial de una semana (k) o vacía si el % está completo.
+  function partialTag(a, k, tag = 'span') {
+    const x = logradoInfo(a, k); if (!x || !x.partial) return '';
+    return `<${tag} class="inc-pill" title="Cálculo parcial: ${esc(partialWhy(x))}. Tómalo como referencia.">Faltan datos${x.few ? ` · ${x.n}/${x.m}` : ' · sem. anterior'}</${tag}>`;
   }
   // Estado de un cambio semanal l (%) frente a la meta: rango de pérdida r, o % buscado b con tolerancia.
   function judge(a, l, r, b, s) {
@@ -1215,10 +1245,14 @@
     if (isBase(a, k)) return { key: 'none', label: 'Semana base', msg: 'La semana inicial fija el punto de partida.' };
     const n = weekWeights(a, k).length, m = minWeighs(w.s);
     if (!n) return w.start > todayISO() ? { key: 'none', label: 'Pendiente', msg: 'Esta semana aún no empieza.' } : { key: 'none', label: 'Faltan datos', msg: 'Aún no hay pesajes en esta semana.' };
-    if (n < m) return { key: 'none', label: 'Faltan pesajes', msg: `Se necesitan al menos ${m} pesajes en la semana para evaluarla (hay ${n}).${w.s && !(w.s.diasPeso || []).length ? ' Si el atleta se pesa menos días, márcalos en «Días de reporte de peso» de la etapa.' : ''}` };
-    const l = logrado(a, k);
-    if (l == null) return { key: 'none', label: 'Faltan datos', msg: 'Faltan pesajes en los 7 días anteriores para comparar.' };
-    return judge(a, l, weekRange(a, k), buscado(a, k), w.s);
+    const x = logradoInfo(a, k);
+    // Con datos incompletos el % se calcula igual y se informa como referencia, sin evaluar la semana.
+    const ref = () => { const j = judge(a, x.pct, weekRange(a, k), buscado(a, k), w.s);
+      return ` Con los datos que hay, el cambio es ${fmtS(x.pct)} %: tómalo como referencia${j.key !== 'none' ? ` (con estos datos quedaría «${j.label}»)` : ''}.`; };
+    if (n < m) return { key: 'none', label: 'Faltan pesajes', msg: `Se necesitan al menos ${m} pesajes en la semana para evaluarla (hay ${n}).${x ? ref() + (x.gap > 1 ? ` Además, ${partialWhy({ gap: x.gap })}.` : '') : ' Tampoco hay pesajes en las 4 semanas anteriores para comparar.'}${w.s && !(w.s.diasPeso || []).length ? ' Si el atleta se pesa menos días, márcalos en «Días de reporte de peso» de la etapa.' : ''}` };
+    if (!x) return { key: 'none', label: 'Faltan datos', msg: 'No hay pesajes en las 4 semanas anteriores para comparar.' };
+    if (x.partial) return { key: 'none', label: 'Faltan datos', msg: `No se evalúa: ${partialWhy(x)}.${ref()}` };
+    return judge(a, x.pct, weekRange(a, k), buscado(a, k), w.s);
   }
   // Media de 7 días al último día con peso de la etapa (hasta hoy), frente a los 7 días anteriores. Cada bloque necesita
   // el mínimo de pesajes. k: semana de la etapa que contiene ese día (de ahí sale la meta).
@@ -1226,10 +1260,12 @@
     const lim = todayISO() < s.fin ? todayISO() : s.fin;
     let d = lim; while (d >= s.inicio && num(dailyOf(a, d).peso) == null) d = addDays(d, -1);
     if (d < s.inicio) return null;
-    const A = weightsIn(a, addDays(d, -6), d), B = weightsIn(a, addDays(d, -13), addDays(d, -7)), m = minWeighs(s);
+    const A = weightsIn(a, addDays(d, -6), d), pb = prevBlock(a, addDays(d, -6)), m = minWeighs(s);
     const j = Math.floor(daysBetween(s.inicio, d) / 7), k = timeline(a).findIndex((w) => w.s === s && w.j === j);
-    const avg = mean(A), prev = B.length ? mean(B) : null, ok = A.length >= m && B.length >= m;
-    return { d, k, avg, prev, nA: A.length, nB: B.length, m, ok, pct: ok ? ((avg - prev) / prev) * 100 : null };
+    const nB = pb && pb.gap === 1 ? pb.n : 0, avg = mean(A), prev = pb ? pb.avg : null, ok = A.length >= m && nB >= m;
+    // Sin el mínimo de pesajes, el % se calcula igual con los que hay (partial) y se muestra como referencia.
+    const pct = prev ? weeklyPct(avg, prev, pb.gap) : null;
+    return { d, k, avg, prev, nA: A.length, nB, gap: pb ? pb.gap : null, m, ok, partial: !ok && pct != null, pct };
   }
   // Media móvil de 7 días en cada día con peso (si esos 7 días tienen el mínimo de pesajes).
   function movingAvg(a, d0, d1, m = 3) {
@@ -2499,8 +2535,8 @@
   const STAGE_ST = { now: 'en curso', next: 'próxima', done: 'terminada' };
   function stageSelect(a, sc, withNone) {
     if (!sc.dated.length) return '';
-    return `<div class="row"><span class="label">Etapa a consultar</span>
-      <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar" style="width:auto;min-width:260px;max-width:100%">${sc.dated.map((x) => `<option value="${x.s.id}" ${sc.sel && x.s === sc.sel.s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${STAGE_ST[stageState(x.s)]})</option>`).join('')}
+    return `<div class="row stage-pick"><span class="label">Etapa a consultar</span>
+      <select class="select" data-bind="ui.panelStage" aria-label="Etapa a consultar">${sc.dated.map((x) => `<option value="${x.s.id}" ${sc.sel && x.s === sc.sel.s ? 'selected' : ''}>E${x.i + 1} · ${esc(x.s.tipo)} · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)} (${STAGE_ST[stageState(x.s)]})</option>`).join('')}
         ${withNone && sc.orphan.length ? `<option value="__none" ${sc.none ? 'selected' : ''}>Sin etapa · ${sc.orphan.length} ${sc.orphan.length === 1 ? 'semana' : 'semanas'}</option>` : ''}</select></div>`;
   }
   // Rango de fechas de una semana: «28/09 – 04/10».
@@ -2519,9 +2555,11 @@
     const r = loss ? weekRange(a, kRef) : null, b = loss ? null : buscado(a, kRef);
     const st = stt === 'next' ? { key: 'none', label: 'Aún no empieza', msg: `Esta etapa empieza el ${fmtDate(s.inicio)}. Registra igual la semana previa: es la base para comparar la semana 1.` }
       : !ro ? { key: 'none', label: 'Sin pesajes', msg: 'Aún no hay pesajes en esta etapa.' }
-      : !ro.ok ? { key: 'none', label: 'Faltan pesajes', msg: `La media de 7 días necesita al menos ${ro.m} pesajes en los últimos 7 días y en los 7 anteriores (hay ${ro.nA} y ${ro.nB}).` }
+      : !ro.ok ? { key: 'none', label: 'Faltan pesajes', msg: `La media de 7 días necesita al menos ${ro.m} pesajes en los últimos 7 días y en los 7 anteriores (hay ${ro.nA} y ${ro.nB}).${ro.pct == null ? ' Tampoco hay pesajes en las 4 semanas anteriores para comparar.'
+        : `${ro.gap > 1 ? ` Como no hay pesajes en los 7 días anteriores, se comparó con el promedio de hace ${ro.gap} semanas, llevado a cambio por semana.` : ''} Con los datos que hay, el cambio es ${fmtS(ro.pct)} %: tómalo como referencia${((j) => (j.key !== 'none' ? ` (con estos datos quedaría «${j.label}»)` : ''))(judge(a, ro.pct, r, b, s))}.`}` }
       : judge(a, ro.pct, r, b, s);
-    const l = ro && ro.ok ? ro.pct : null;
+    const l = ro ? ro.pct : null, part = !!(ro && ro.partial);
+    const partTxt = part ? `Faltan datos: ${ro.nA} y ${ro.nB} pesajes (se necesitan ${ro.m} en cada bloque)${ro.gap > 1 ? `; se comparó con hace ${ro.gap} semanas` : ''}. Es una referencia.` : '';
     // Peso de partida: el inicial de la etapa o, si no está, el promedio de los 7 días previos (o el de su primera semana).
     const own = num(s.pesoInicial), pre = weightsIn(a, addDays(s.inicio, -7), addDays(s.inicio, -1)), w1 = sk.length ? weekWeights(a, sk[0]) : [];
     const p0 = own ?? (pre.length ? mean(pre) : w1.length ? mean(w1) : null);
@@ -2544,7 +2582,7 @@
       return `<tr class="${k === cw ? 'today' : ''}"><td class="lbl nowrap">${weekLabel(a, k)}${k === cw ? ' <span class="pill gold">Actual</span>' : ''}</td>
         <td class="nowrap">${weekRangeTxt(a, k, true)}</td>
         <td class="num"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td><td class="num nowrap">${w.pre ? '' : metaTxt(a, k)}</td>
-        <td class="num nowrap">${wl != null ? `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.msg)}">${fmtS(wl)}%</span>` : '—'}</td>
+        <td class="num nowrap">${wl != null ? `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.msg)}">${fmtS(wl)}%</span>${partialTag(a, k, 'div')}` : '—'}</td>
         <td class="nowrap">${w.pre ? '<span class="muted small">Base de la semana 1</span>' : `<span class="pill ${pillCls[ws.key]}" title="${esc(ws.msg)}">${esc(ws.label)}</span>`}</td>
         <td class="num">${n}${np && !w.pre ? `<span class="muted"> / ${np}</span>` : ''}</td>
         <td class="num">${stp != null ? fmt(stp) : '—'}</td><td class="num">${wa.avg != null ? fmt(wa.avg, 1) : '—'}</td></tr>`;
@@ -2554,8 +2592,8 @@
       const x = l != null ? Math.round(-l * 100) / 100 : null, has = x != null && r;
       const v = !has ? '—' : x < r.min ? `${fmt(r.min - x, 2)} pp` : x > r.max ? `${fmt(x - r.max, 2)} pp` : 'Dentro';
       const sub = !has ? 'Pérdida semanal frente al rango' : x < r.min ? 'bajo el mínimo del rango' : x > r.max ? 'sobre el máximo del rango' : `pierde ${pctTxt(x)} % por semana`;
-      diffCell = `<div><div class="label">Frente al rango</div><div class="big-num" style="font-size:28px">${v}</div><div class="small muted">${sub}</div></div>`;
-    } else diffCell = `<div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp</div></div>`;
+      diffCell = `<div><div class="label">Frente al rango</div><div class="big-num" style="font-size:28px">${v}</div><div class="small muted">${sub}${has && part ? ' · referencial, faltan datos' : ''}</div></div>`;
+    } else diffCell = `<div><div class="label">Diferencia frente a la meta</div><div class="big-num" style="font-size:28px">${l != null && b != null ? fmtS(l - b) + ' pp' : '—'}</div><div class="small muted">Tolerancia ± ${fmt(num(cfgOf(a).tol), 2)} pp${l != null && b != null && part ? ' · referencial, faltan datos' : ''}</div></div>`;
     const metaCell = loss
       ? `<div><div class="label">Rango de la semana · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${r ? rangeTxt(r) : '—'}</div><div class="small muted">${r ? `${esc(r.label)}${r.desde ? ` · desde la semana ${r.desde}` : ''}` : 'Elige el rango en Plan › Planificación'}</div></div>`
       : `<div><div class="label">Objetivo semanal · E${sel.i + 1}</div><div class="big-num" style="font-size:28px">${b != null ? fmtS(b) + '%' : '—'}</div><div class="small muted">${esc(s.tipo)}</div></div>`;
@@ -2566,7 +2604,7 @@
     </div>
     <section class="card status-hero">
       <div><div class="k-label label">CÓMO VA LA ETAPA${wRef.s === s ? ` · SEMANA ${wRef.j + 1} DE ${wRef.n}` : ''}</div><div class="status-big ${st.key}">${st.label.toUpperCase()}</div><div class="muted small mt8">${st.msg}</div></div>
-      <div><div class="label">Cambio semanal · media 7 días</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}</div><div class="small muted">${ro ? `7 días al ${fmtDate(ro.d, true)} frente a los 7 anteriores` : 'Sin pesajes en la etapa'}</div></div>
+      <div><div class="label">Cambio semanal · media 7 días</div><div class="big-num" style="font-size:28px">${l != null ? fmtS(l) + '%' : '—'}${part ? '<span class="inc-pill hero-inc">Faltan datos</span>' : ''}</div><div class="small muted">${ro ? `7 días al ${fmtDate(ro.d, true)} frente a los 7 anteriores${part ? `. ${partTxt}` : ''}` : 'Sin pesajes en la etapa'}</div></div>
       ${metaCell}
       ${diffCell}
     </section>
@@ -2584,7 +2622,7 @@
       <div class="card-head"><h3>Semanas de la etapa</h3><span class="sub">${sk.length} ${sk.length === 1 ? 'semana' : 'semanas'} · ${fmtDate(s.inicio)} – ${fmtDate(s.fin)}</span></div>
       <div class="table-wrap" style="border:0;border-radius:0"><table class="t"><thead><tr><th>Semana</th><th>Fechas</th><th class="num">Peso prom. (kg)</th><th class="num">${loss ? 'Rango de pérdida' : '% buscado'}</th><th class="num">% logrado</th><th>Estado</th><th class="num">Pesajes</th><th class="num">Pasos prom.</th><th class="num">Adherencia</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
-      <div class="card-body hint" style="padding-top:10px">% logrado: promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos ${minWeighs(s)} pesajes.${loss ? ' Bajo el rango: lento · dentro: adecuado · sobre el rango: rápido.' : ''}</div>
+      <div class="card-body hint" style="padding-top:10px">% logrado: promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos ${minWeighs(s)} pesajes; con menos, el % se calcula igual con los que hay y se marca «Faltan datos» (es una referencia).${loss ? ' Bajo el rango: lento · dentro: adecuado · sobre el rango: rápido.' : ''}</div>
     </section>
     <section class="card mt16">
       <div class="card-head"><h3>Evolución del peso · E${sel.i + 1}</h3><span class="spacer"></span>
@@ -2741,7 +2779,7 @@
           <span class="wk-stat"><small>Pesajes</small><b>${n}/${(skw && (skw.diasPeso || []).length) || 7}</b></span>
           <span class="wk-stat"><small>Entrenos</small><b>${trained}/${(skw && (skw.diasEntreno || []).length) || 7}</b></span>
           <span class="wk-stat"><small>Pasos prom.</small><b>${steps != null ? fmt(steps) : '—'}</b>${stepsIncomplete(a, k) ? `<span class="inc-pill" title="Promedio parcial: faltan ${stepsIncomplete(a, k)} días por ingresar">Incompleto · ${weekStepsDays(a, k)}/7</span>` : ''}</span>
-          ${!isBase(a, k) ? `<span class="wk-stat"><small>Cambio</small>${l != null ? `<span class="pill ${pillCls[wst.key]}" title="${esc(wst.label)} · ${esc(wst.msg)}">${fmtS(l)}%</span>` : '<b>—</b>'}</span>` : ''}
+          ${!isBase(a, k) ? `<span class="wk-stat"><small>Cambio</small>${l != null ? `<span class="pill ${pillCls[wst.key]}" title="${esc(wst.label)} · ${esc(wst.msg)}">${fmtS(l)}%</span>${partialTag(a, k)}` : '<b>—</b>'}</span>` : ''}
         </div></div></td></tr>`;
       if (folded) continue;
       rows += days.map((d) => {
@@ -2839,7 +2877,7 @@
         <td class="${ro ? 'computed nowrap' : 'pad0'}${etapaMismatch(a, k) ? ' etapa-warn' : ''}" style="min-width:${ro ? 0 : 190}px">${etapaCell(a, k, 'cell', true)}</td>
         <td class="num computed"><b>${avg != null ? fmt(avg, 2) : '—'}</b></td>
         ${isBase(a, k) ? '<td class="computed"></td>' : lossW ? rangeCell(k) : ro ? `<td class="num computed">${buscado(a, k) != null ? fmtS(buscado(a, k)) + '%' : '—'}</td>` : buscadoCell(k)}
-        <td class="num computed nowrap">${l != null ? `<span class="pill ${pillCls[st.key]}" title="${esc(st.msg)}">${fmtS(l)}%</span>` : '—'}</td>
+        <td class="num computed nowrap">${l != null ? `<span class="pill ${pillCls[st.key]}" title="${esc(st.msg)}">${fmtS(l)}%</span>${partialTag(a, k, 'div')}` : '—'}</td>
         <td class="computed nowrap">${isBase(a, k) ? '<span class="muted small">Base</span>' : `<span class="pill ${pillCls[st.key]}" title="${esc(st.msg)}">${esc(st.label)}</span>`}</td>
         ${wo.pre ? '<td class="computed"></td><td class="computed"></td>' : macCell(k, 'macrosE', pmOf(k).E) + macCell(k, 'macrosD', pmOf(k).D)}
         <td class="center">${!ro && k < cw && (w.macrosE || w.macrosD) && (w.macrosE !== pmOf(k).E || w.macrosD !== pmOf(k).D) && (pmOf(k).E || pmOf(k).D) ? `<button class="btn xs ghost" data-action="fillMacros" data-k="${k}" title="Reemplazar lo registrado por los requerimientos de la etapa de esa semana">${ic('copy', 13)}</button>` : ''}</td>
@@ -2855,7 +2893,7 @@
       <div class="muted small">${sc.sel ? `Se muestran las ${sc.ks.filter((k) => !wkOf(a, k).pre).length} semanas de <b>E${sc.sel.i + 1} · ${esc(sc.sel.s.tipo)}</b> (${fmtDate(sc.sel.s.inicio)} – ${fmtDate(sc.sel.s.fin)})${sc.ks.some((k) => wkOf(a, k).pre) ? ', con su semana previa' : ''}.` : sc.none ? 'Semanas del registro que no pertenecen a ninguna etapa.' : ''}</div>
       ${stageSelect(a, sc, true)}
     </div>
-    <div class="muted" style="margin-bottom:6px">Peso y % logrado se calculan desde el registro diario: el promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos 3 pesajes (o los días de pesaje de la etapa, si son menos). En las etapas de pérdida la meta es el rango de la etapa: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Si no hay pasos diarios registrados, puedes ingresar el promedio semanal a mano.</div>
+    <div class="muted" style="margin-bottom:6px">Peso y % logrado se calculan desde el registro diario: el promedio de la semana frente al de los 7 días anteriores (la semana 1, frente a la semana previa a la etapa). Una semana se evalúa con al menos 3 pesajes (o los días de pesaje de la etapa, si son menos); con menos, el % se calcula igual con los que hay y se marca «Faltan datos»: tómalo como referencia. En las etapas de pérdida la meta es el rango de la etapa: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Si no hay pasos diarios registrados, puedes ingresar el promedio semanal a mano.</div>
     <div class="muted" style="margin-bottom:12px">Escalas y hambre son el <b>promedio de los días anotados</b> en el Registro diario. Si a la semana le faltan días, el promedio lleva <span class="inc-mini">4/7</span> (días con dato de 7).</div>
     <div class="table-wrap week-table-wrap">
       <table class="t wk-table">
@@ -3622,7 +3660,7 @@
         ${ks.map((k) => { const avg = weekAvg(a, k), b = buscado(a, k), l = logrado(a, k), st = status(a, k), steps = weekSteps(a, k);
           return `<tr><td><b>${esc(weekLabel(a, k))}</b></td><td>${fmtDate(weekStart(a, k), true)}</td><td>${esc(weekEtapa(a, k))}</td><td>${avg != null ? fmt(avg, 2) : '—'}</td><td>${isBase(a, k) ? '' : metaTxt(a, k)}</td><td>${l != null ? fmtS(l) + '%' : '—'}</td><td><span class="pd-pill ${st.key}">${esc(st.label)}</span></td><td>${steps != null ? fmt(steps) : '—'}</td>${SCALES.map(([f]) => `<td>${sc(k, f)}</td>`).join('')}</tr>`; }).join('')}
       </tbody></table></div>
-      <p class="pd-foot">Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
+      <p class="pd-foot">Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores; si faltan pesajes se calcula con los que hay y el estado dice «Faltan pesajes» o «Faltan datos» (es una referencia). En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.</p>`
       : '<p class="pd-empty">Aún no hay registros de seguimiento.</p>';
     const sec = (n, title, html, brk = true, key = '') => `<section class="pd-sec${brk ? ' pd-break' : ''}"${key ? ` id="pd-sec-${key}"` : ''}><div class="pd-sec-title"><span>${n}</span>${title}${key ? '<a class="pd-back" href="#pd-indice">Volver al índice</a>' : ''}</div>${html}</section>`;
     const cover = `<header class="pd-cover"><div><div class="pm-eyebrow">Planificación nutricional</div><h1>${esc(a.q.nombre || 'Atleta')}</h1></div>
@@ -3935,7 +3973,7 @@
           return [{ text: weekLabel(a, k), bold: true }, fmtDate(weekStart(a, k), true), str(weekEtapa(a, k)), r(avg != null ? fmt(avg, 2) : '—'), r(isBase(a, k) ? '' : metaTxt(a, k)), r(l != null ? fmtS(l) + '%' : '—'),
             { text: st.label, bold: true, color: pc[0], fillColor: pc[1], alignment: 'center' }, r(steps != null ? fmt(steps) : '—')].concat(SCALES.map(([f]) => { const v = weekField(a, k, f).avg; return r(v != null ? fmt(v, 1) : '—'); }));
         })) }, layout: Object.assign({}, lines, { paddingLeft: () => 3, paddingRight: () => 3 }), fontSize: 7.5 },
-      { text: 'Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores. En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
+      { text: 'Peso: promedio de los días registrados en la semana. % logrado: frente al promedio de los 7 días anteriores; si faltan pesajes se calcula con los que hay y el estado dice «Faltan pesajes» o «Faltan datos» (es una referencia). En las etapas de pérdida la meta es un rango de pérdida semanal: bajo el rango, lento; dentro, adecuado; sobre el rango, rápido. Escalas (0-5): promedio de los días anotados; en Estrés el valor alto es el desfavorable.', fontSize: 7.5, color: '#666', margin: [0, 7, 0, 0] },
     ] : [empty('Aún no hay registros de seguimiento.')];
 
     // Primera hoja: portada e índice. Cada línea del índice lleva a su apartado (y, en la minuta, a cada tipo de día),

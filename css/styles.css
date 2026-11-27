@@ -856,6 +856,10 @@ button.home-link { font: inherit; color: inherit; text-align: left; cursor: poin
 .inc-pill { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 99px; font-size: 10.5px; font-weight: 600; color: var(--warn); background: var(--warn-soft); border: 1px solid rgb(var(--warn-rgb) / .35); white-space: nowrap; vertical-align: middle; }
 td .inc-pill { margin: 3px 0 0; display: inline-block; }
 .kpi .k-note .inc-pill { margin: 0 0 4px; }
+/* Selector «Etapa a consultar»: no se sale de la pantalla en el celular con nombres largos */
+.stage-pick { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.stage-pick .select { width: auto; min-width: min(260px, 100%); max-width: 100%; }
+.big-num .hero-inc { margin-left: 8px; vertical-align: 6px; letter-spacing: 0; }
 
 /* Macros de la semana sincronizados con Planificación */
 td.mac-sync { min-width: 170px; line-height: 1.35; font-size: 12.5px; }

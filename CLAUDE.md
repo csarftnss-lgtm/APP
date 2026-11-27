@@ -87,8 +87,9 @@ Forma de trabajar con el usuario:
   - `timeline(a)` arma las semanas por etapa (con caché en WeakMap). La semana 1 parte en la fecha de inicio de la etapa.
   - Hay una semana previa (`pre`) y bloques `gap` entre etapas.
   - Los datos semanales se guardan con la fecha ISO de inicio como clave (`wkKey`).
-  - El promedio semanal necesita al menos 3 pesajes.
-  - `prevAvg` usa los 7 días anteriores; en la semana 1 usa el peso inicial de la etapa.
+  - Una semana se evalúa con al menos 3 pesajes (`minWeighs`).
+  - `prevInfo` compara con los 7 días anteriores; en la semana 1, si no hay pesajes, usa el peso inicial de la etapa. Si tampoco hay, busca el bloque de 7 días con pesajes más cercano, hasta 4 semanas atrás (`prevBlock`), y lleva el cambio a % por semana (`weeklyPct`).
+  - **Datos incompletos:** con menos pesajes del mínimo, o comparando con un bloque más antiguo, el % se calcula igual (`logradoInfo().partial`, `rolling7().partial`) y se muestra con la marca «Faltan datos» (`partialTag`). La semana no se evalúa: el estado queda en gris y el mensaje da el % como referencia.
   - El Panel muestra `rolling7`, la media de 7 días frente a los 7 días anteriores.
   - El gráfico muestra una banda con el rango esperado (`expectedAt`) y la media móvil.
 - **Recetario:**
