@@ -3562,7 +3562,7 @@
       <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy && nOn ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
     ${(() => { const all = docStagesAll(a), off = docStageOff(a), nOnSt = all.filter((x) => !off.includes(x.s.id)).length;
-      return docOn(a, 'planif') && all.length > 1 ? `<div class="row mn-stages no-print" role="group" aria-label="Etapas que se imprimen en la Planificación"><span class="label mn-picks-l">Etapas en la Planificación:</span>
+      return (docOn(a, 'planif') || docOn(a, 'cal')) && all.length > 1 ? `<div class="row mn-stages no-print" role="group" aria-label="Etapas que se imprimen en la Planificación y el calendario"><span class="label mn-picks-l">Etapas en la Planificación y el calendario:</span>
         ${all.map((x) => { const on = !off.includes(x.s.id); return `<label class="chip${on ? '' : ' off'}"><input type="checkbox" data-action="docStage" data-id="${esc(x.s.id)}" ${on ? 'checked' : ''}><span class="box"></span>E${x.n} · ${esc(x.s.tipo)}</label>`; }).join('')}
         <span class="small muted">${nOnSt === all.length ? 'Se imprimen todas.' : `Se ${nOnSt === 1 ? 'imprime' : 'imprimen'} ${nOnSt} de ${all.length}.`}</span></div>` : ''; })()}
     <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
@@ -3694,8 +3694,13 @@
 
   // ---- Planificación completa: 1) planificación de la etapa, 2) minuta ejemplo de cada tipo de día, 3) distribución de comidas, 4) resumen del seguimiento semanal ----
   // Meses del calendario de alimentación que tienen al menos un día asignado ('aaaa-mm'), y días por tipo en ellos.
+  // Si en la Planificación se desmarcaron etapas, solo entran los días dentro de las fechas de las etapas que se imprimen.
   function calDocData(a) {
-    const days = planDays(a); // lo marcado a mano y lo que dan los días de entrenamiento de las etapas
+    const all = docStagesAll(a), sel = docStages(a), part = sel.length < all.length;
+    const ranges = sel.filter((x) => stageDated(x.s)).map((x) => [x.s.inicio, x.s.fin]);
+    const inSel = (d) => !part || ranges.some(([i, f]) => d >= i && d <= f);
+    const days = planDays(a).filter(([d]) => inSel(d)); // lo marcado a mano y lo que dan los días de entrenamiento de las etapas
+    const typeOf = (d) => (inSel(d) ? planType(a, d) : null); // tipo de día que se pinta en el calendario (fuera de las etapas elegidas, en blanco)
     const months = [...new Set(days.map(([d]) => d.slice(0, 7)))];
     const counts = {}; days.forEach(([, dt]) => { counts[dt.id] = (counts[dt.id] || 0) + 1; });
     const grid = (ym) => { // semanas del mes (lunes a domingo) con la fecha ISO o null
@@ -3704,10 +3709,11 @@
       while (cells.length % 7) cells.push(null);
       return Array.from({ length: cells.length / 7 }, (_, w) => cells.slice(w * 7, w * 7 + 7));
     };
-    return { months, counts, grid, label: (ym) => `${CAL_M[+ym.slice(5) - 1]} ${ym.slice(0, 4)}` };
+    return { months, counts, grid, typeOf, part, label: (ym) => `${CAL_M[+ym.slice(5) - 1]} ${ym.slice(0, 4)}` };
   }
   // Etapas para el documento: las que tienen objetivo y además fechas u objetivos escritos.
-  // Etapas que se imprimen en la Planificación: todas menos las desmarcadas (a.ui.docStageOff, ids). Conservan su número (E2…).
+  // Etapas que se imprimen en la Planificación (y cuyas fechas muestra el calendario): todas menos las desmarcadas (a.ui.docStageOff, ids).
+  // Conservan su número (E2…).
   const docStageOff = (a) => (Array.isArray(a.ui.docStageOff) ? a.ui.docStageOff : []);
   function docStages(a) { const off = docStageOff(a); return docStagesAll(a).filter((x) => !off.includes(x.s.id)); }
   function docStagesAll(a) {
@@ -3778,8 +3784,8 @@
     const cd = calDocData(a);
     const calHtml = cd.months.length ? `<div class="pd-cal-legend">${a.dayTypes.filter((dt) => cd.counts[dt.id]).map((dt) => `<span><i style="background:${dayScheme(dt).light}">${esc(dtInitial(dt))}</i>${esc(dt.name)} <b>${cd.counts[dt.id]} ${cd.counts[dt.id] === 1 ? 'día' : 'días'}</b></span>`).join('')}</div>
       <div class="pd-cal">${cd.months.map((ym) => `<table class="pd-cal-m"><thead><tr><th colspan="7">${cd.label(ym)}</th></tr><tr>${DOW_L.map((l) => `<th>${l}</th>`).join('')}</tr></thead><tbody>
-        ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = planType(a, d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
-      : '<p class="pd-empty">Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.</p>';
+        ${cd.grid(ym).map((w) => `<tr>${w.map((d) => { if (!d) return '<td></td>'; const dt = cd.typeOf(d); return dt ? `<td class="on" style="background:${dayScheme(dt).light}">${+d.slice(8)}<i>${esc(dtInitial(dt))}</i></td>` : `<td>${+d.slice(8)}</td>`; }).join('')}</tr>`).join('')}</tbody></table>`).join('')}</div>`
+      : `<p class="pd-empty">${cd.part ? 'Las etapas elegidas para imprimir no tienen días con tipo de alimentación en sus fechas.' : 'Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'}</p>`;
     // 3 · Minuta ejemplo de cada tipo de día
     const minutas = docMinDays(a).map((dt, i) => {
       const pm = minutaMeals(dt);
@@ -4066,7 +4072,7 @@
     const calMonth = (ym) => ({ table: { widths: Array(7).fill('*'), body: [
         [{ text: cd.label(ym), colSpan: 7, bold: true, fontSize: 9, alignment: 'center', margin: [0, 1, 0, 2] }, {}, {}, {}, {}, {}, {}],
         DOW_L.map((l) => ({ text: l, fontSize: 6.5, bold: true, color: '#666', alignment: 'center' })),
-      ].concat(cd.grid(ym).map((w) => w.map((d) => { if (!d) return { text: '' }; const dt = planType(a, d);
+      ].concat(cd.grid(ym).map((w) => w.map((d) => { if (!d) return { text: '' }; const dt = cd.typeOf(d);
         return dt ? { text: [{ text: String(+d.slice(8)) }, { text: ' ' + dtInitial(dt), fontSize: 5.5, bold: true }], fillColor: dayScheme(dt).light, alignment: 'center' } : { text: String(+d.slice(8)), color: '#555', alignment: 'center' }; }))) },
       layout: { hLineWidth: () => 0.5, vLineWidth: () => 0.5, hLineColor: () => '#ddd', vLineColor: () => '#ddd', paddingLeft: () => 1, paddingRight: () => 1, paddingTop: () => 2, paddingBottom: () => 2 }, fontSize: 7.5 });
     const calPdf = [];
@@ -4078,7 +4084,7 @@
         while (row.length < 3) row.push({ width: '*', text: '' });
         calPdf.push({ columns: row, columnGap: 12, margin: [0, 0, 0, 12], unbreakable: true });
       }
-    } else calPdf.push(empty('Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'));
+    } else calPdf.push(empty(cd.part ? 'Las etapas elegidas para imprimir no tienen días con tipo de alimentación en sus fechas.' : 'Aún no hay días con tipo de alimentación: define los días de entrenamiento de la etapa o márcalos en el calendario del Menú diario.'));
 
     // Apartados que se imprimen (marcados en la vista previa), numerados de nuevo; la portada va con el primero.
     const secs = docSecs(a), num = (k) => (secs.find((x) => x.key === k) || {}).n, mac = docMac(a);
@@ -4753,7 +4759,7 @@
     // Etapa que se imprime (o no) en la Planificación del documento. Queda al menos una.
     docStage(el) {
       const a = A(), off = docStageOff(a), id = el.dataset.id, all = docStagesAll(a);
-      if (!off.includes(id) && all.filter((x) => !off.includes(x.s.id)).length <= 1) { el.checked = true; toast('Deja al menos una etapa. Para no imprimir la Planificación, desmarca «Planificación» en «Imprimir».'); return; }
+      if (!off.includes(id) && all.filter((x) => !off.includes(x.s.id)).length <= 1) { el.checked = true; toast('Deja al menos una etapa. Para no imprimir la Planificación o el calendario, desmárcalos en «Imprimir».'); return; }
       a.ui.docStageOff = off.includes(id) ? off.filter((x) => x !== id) : off.concat(id);
       save(); render();
     },
