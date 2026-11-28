@@ -1684,9 +1684,11 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 /* Distribución de comidas: comida de ejemplo traída del Menú diario */
 .dm-ex { display: grid; gap: 8px; justify-items: start; margin-top: 8px; width: 100%; }
 .dm-ex-foods { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 2px 18px; font-size: 13px; color: var(--text-2); }
-.dm-ex-foods li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); min-width: 0; }
-.dm-ex-foods li span { min-width: 0; overflow-wrap: anywhere; }
-.dm-ex-foods li b { color: var(--text); font-weight: 600; white-space: nowrap; }
+/* Alimento a la izquierda y cantidad a la derecha. Una cantidad larga («1 lámina de jamón de pavo o pollo…») se reparte
+   en varias líneas y no aplasta el nombre del alimento: la cantidad ocupa como máximo un poco más de la mitad de la fila. */
+.dm-ex-foods li { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); min-width: 0; }
+.dm-ex-foods li span { flex: 1 1 50%; min-width: 0; overflow-wrap: break-word; }
+.dm-ex-foods li b { flex: 0 1 auto; max-width: 55%; color: var(--text); font-weight: 600; text-align: right; overflow-wrap: break-word; text-wrap: balance; }
 .dm-ex-tot { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ex-list { display: grid; gap: 8px; }
 .ex-opt { display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-2); background: var(--bg-2); color: inherit; font: inherit; cursor: pointer; }
