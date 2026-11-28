@@ -3249,12 +3249,16 @@
     </div>`;
   }
   // Lista de objetivos de una etapa (se pueden agregar y quitar). Salen en el documento que se descarga.
+  // Objetivos escritos de una etapa (sin los que están en blanco).
+  const stageObjs = (s) => ((s && Array.isArray(s.objetivos)) ? s.objetivos : []).map((x) => String(x || '')).filter((x) => x.trim());
   function stageObjetivos(s, i) {
     if (!Array.isArray(s.objetivos)) s.objetivos = [''];
     const n = s.objetivos.length, filled = s.objetivos.filter((x) => String(x || '').trim()).length;
+    const prev = i > 0 ? stagesOf(A())[i - 1] : null, pn = stageObjs(prev).length;
+    const copyBtn = prev ? `<button class="btn sm" data-action="copyPrevObjs" data-i="${i}" ${pn ? '' : 'disabled'} title="${pn ? `Copia ${pn === 1 ? 'el objetivo' : `los ${pn} objetivos`} de E${i}${prev.tipo ? ` «${esc(prev.tipo)}»` : ''} en esta etapa` : `E${i} aún no tiene objetivos escritos`}">${ic('copy', 14)} Copiar de la etapa anterior (E${i})</button>` : '';
     return `<div class="stage-objs mt16">
       <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Objetivos de la etapa <span class="muted">· ${filled} ${filled === 1 ? 'definido' : 'definidos'}</span></div>
-        <button class="btn sm" data-action="addObjetivo" data-i="${i}">${ic('plus', 14)} Agregar objetivo</button></div>
+        <div class="row req-btns">${copyBtn}<button class="btn sm" data-action="addObjetivo" data-i="${i}">${ic('plus', 14)} Agregar objetivo</button></div></div>
       ${n ? `<ol class="pf-list mt8">${s.objetivos.map((_, j) => `<li class="pf-item"><span class="meal-idx" aria-hidden="true">${j + 1}</span>
         ${TA(`tracking.config.stages.${i}.objetivos.${j}`, { rows: 2, ph: `Objetivo ${j + 1}`, attrs: `aria-label="Objetivo ${j + 1} de la etapa ${i + 1}"` })}
         <button class="btn sm ghost icon danger" data-action="delObjetivo" data-i="${i}" data-j="${j}" title="Eliminar objetivo" aria-label="Eliminar objetivo ${j + 1}">${ic('trash', 14)}</button></li>`).join('')}</ol>`
@@ -4622,6 +4626,22 @@
       if (!Array.isArray(s.objetivos)) s.objetivos = [];
       s.objetivos.push(''); commit();
       setTimeout(() => { const t = $(`[data-bind="tracking.config.stages.${i}.objetivos.${s.objetivos.length - 1}"]`); t?.scrollIntoView({ block: 'center' }); t?.focus({ preventScroll: true }); }, 0);
+    },
+    // Copia en la etapa los objetivos escritos de la etapa anterior. Si ya tiene objetivos, se elige: sumarlos (sin repetir) o reemplazarlos.
+    copyPrevObjs(el) {
+      const a = A(), i = +el.dataset.i, st = stagesOf(a), s = st[i], p = st[i - 1]; if (!s || !p) return;
+      const from = stageObjs(p), own = stageObjs(s), name = (x, n) => `E${n}${x.tipo ? ` «${esc(x.tipo)}»` : ''}`;
+      if (!from.length) { toast(`E${i} aún no tiene objetivos escritos.`); return; }
+      const done = (list, msg) => { s.objetivos = list; closeModal(); commit(); toast(msg); };
+      if (!own.length) { done(from.slice(), `${from.length === 1 ? 'Objetivo copiado' : `${from.length} objetivos copiados`} de E${i} en E${i + 1}.`); return; }
+      const nuevos = from.filter((x) => !own.some((y) => y.trim() === x.trim()));
+      promptModal('Copiar objetivos de la etapa anterior', `
+        <div class="muted small" style="margin-bottom:8px">Objetivos de <b>${name(p, i)}</b>:</div>
+        <ol class="copy-objs">${from.map((x) => `<li>${esc(x)}</li>`).join('')}</ol>
+        ${F(`${name(s, i + 1)} ya tiene ${own.length} ${own.length === 1 ? 'objetivo' : 'objetivos'}`, `<select class="select" id="m-objs"><option value="add">Agregarlos a los actuales${nuevos.length < from.length ? ` (solo ${nuevos.length === 1 ? 'el que no está' : `los ${nuevos.length} que no están`})` : ''}</option><option value="rep">Reemplazar los actuales</option></select>`)}`, () => {
+        if ($('#m-objs').value === 'rep') done(from.slice(), `Objetivos de E${i + 1} reemplazados por los de E${i}.`);
+        else done(own.concat(nuevos), nuevos.length ? `${nuevos.length === 1 ? 'Se agregó 1 objetivo' : `Se agregaron ${nuevos.length} objetivos`} de E${i}.` : `E${i + 1} ya tenía todos los objetivos de E${i}.`);
+      }, 'Copiar');
     },
     delObjetivo(el) {
       const s = stagesOf(A())[+el.dataset.i]; if (!s) return;
