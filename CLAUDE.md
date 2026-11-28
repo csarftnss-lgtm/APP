@@ -42,6 +42,7 @@ Forma de trabajar con el usuario:
 - **Rutas:** se guardan en localStorage `prepcoach-route` (`inicio` = selección de usuarios, `atleta` = resumen del atleta, `cuestionario`, `plan/req`, `plan/planif`, `plan/menu`, `plan/dist`, `plan/minuta`, `plan/alimentos`, `seg`, `acceso`, `pg`). Fija la clave y recarga, o navega con `#/ruta`.
 - **Importar un respaldo:** usa `setInputFiles('#json-input', archivo)` y luego confirma en `#modal-root .btn.primary`.
 - **Leer el estado:** está en IndexedDB `prepcoach`, store `kv`, clave `state`.
+- **Google Drive (simulado):** no se puede entrar a la cuenta real del usuario. Sirve un GIS falso en `https://accounts.google.com/gsi/client` (define `google.accounts.oauth2.initTokenClient`, cuyo `requestAccessToken` llama al `callback` con `{ access_token: 'tok-…', expires_in: 3600 }`) e intercepta `https://www.googleapis.com/**` con un Drive en memoria compartido entre varios contextos (equipos): búsqueda `files?q=`, crear carpeta, metadatos, `alt=media`, carga reanudable (`uploadType=resumable` → `Location` → `PUT`). Responde con cabeceras CORS (incluida `Access-Control-Expose-Headers: Location`). Para simular «sin internet», aborta esas rutas: `ctx.setOffline` no corta las rutas interceptadas.
 - **PDF (pdfmake 0.2.7 desde cdnjs):**
   - Si cdnjs no responde en el contenedor, instala `npm i pdfmake@0.2.7` en el scratchpad.
   - Sirve `build/pdfmake.min.js` y `vfs_fonts.js` con `page.route('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.7/*', …)`.
@@ -58,6 +59,13 @@ Forma de trabajar con el usuario:
   - El estado `S` vive en IndexedDB `prepcoach` → `kv` → `state`. Si falla, usa localStorage `prepcoach-state`.
   - Otras claves de localStorage: `prepcoach-theme`, `prepcoach-route`, `prepcoach-collapsed`, `prepcoach-sb` y `prepcoach-auth`. `prepcoach-auth` también puede estar en sessionStorage.
   - **No cambies ninguna clave.**
+- **Sincronización con Google Drive** (solo en GitHub Pages, modo local):
+  - El estado `S` (el mismo JSON que un respaldo ⬇) se guarda en `PrepCoach - datos.json`, dentro de la carpeta `PrepCoach` del Drive del coach. Permiso `drive.file`: la app solo ve los archivos que ella crea. ID de cliente OAuth en `GD_CLIENT` (no es secreto); origen autorizado: `https://csarftnss-lgtm.github.io`.
+  - Acceso con Google Identity Services (`loadGis`, `gdAuth`): token de 1 h, que solo se puede pedir con un toque (Google abre una ventana). La primera vez `prompt: 'select_account'`; al reconectar, `''`.
+  - Claves nuevas: localStorage `prepcoach-drive` = `{ on, fileId, folderId, ver, hash, dirty, changedAt, at, dev }` y sessionStorage `prepcoach-drive-token`.
+  - `save()` → `gdChanged()` marca `dirty` y sube 4 s después (`gdSync`). También sincroniza al abrir (si el token sigue vigente), al volver a la pestaña (`visibilitychange`) y al volver internet (`online`).
+  - `gdSync`: si Drive cambió (`version` ≠ `ver`) y aquí no, baja y reemplaza (`gdApply`, con `migrate`). Si aquí cambió y Drive no, sube (`gdUpload`, carga reanudable). Si cambiaron los dos, o es la primera vez en un equipo con datos propios, pregunta (`gdAsk` → `gdPick`); la versión que no se elige se descarga como respaldo. Un equipo sin datos usa los de Drive sin preguntar. `gdHash` evita subir lo que no cambió.
+  - Indicador en la barra superior (`gdIndicator`, `#gd-state`, menú `gdMenu`) y aviso en la vista cuando hay que reconectar o elegir versión (`gdBanner`). `gdOff` desconecta este equipo y conserva los datos.
 - **Respaldo:**
   - ⬇ exporta todo `S` en JSON; ⬆ lo importa y reemplaza el estado.
   - Las imágenes van dentro del JSON como data URL, así que un respaldo puede pesar varios MB.

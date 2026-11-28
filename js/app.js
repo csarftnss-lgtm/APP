@@ -84,6 +84,7 @@
     chevL: '<path d="m15 18-6-6 6-6"/>',
     chevR: '<path d="m9 18 6-6-6-6"/>',
     check: '<path d="M20 6 9 17l-5-5"/>',
+    cloud: '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>',
     send: '<path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
     target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
     alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
@@ -295,7 +296,7 @@
     setSaveState('saving');
     clearTimeout(saveTimer);
     if (MODE === 'sync') { saveTimer = setTimeout(flush, 700); return; }
-    saveTimer = setTimeout(async () => { await writeState(); setSaveState('ok'); }, 350);
+    saveTimer = setTimeout(async () => { await writeState(); setSaveState('ok'); gdChanged(); }, 350);
   }
   async function flush() {
     if (flushing) { flushAgain = true; return; }
@@ -435,6 +436,199 @@
     el.classList.toggle('saving', st === 'saving');
     el.classList.toggle('error', st === 'error');
     el.lastChild.textContent = st === 'saving' ? (MODE === 'sync' ? 'Sincronizando…' : 'Guardando…') : st === 'error' ? 'Sin sincronizar' : (MODE === 'sync' ? 'Sincronizado' : 'Guardado');
+  }
+
+  // =====================================================================
+  // Sincronización con Google Drive (en GitHub Pages, sin servidor)
+  // =====================================================================
+  // Los datos (S, el mismo JSON que un respaldo ⬇) se guardan en «PrepCoach - datos.json», dentro de la carpeta
+  // «PrepCoach» del Drive del coach. Acceso con Google Identity Services: token de 1 h y permiso drive.file (la app
+  // solo ve los archivos que ella misma crea). Cada equipo conserva su copia local (IndexedDB) y funciona sin internet.
+  // prepcoach-drive (localStorage): { on, fileId, folderId, ver: versión de Drive ya sincronizada, hash: huella de lo
+  //   sincronizado, dirty: hay cambios locales sin subir, changedAt, at: última sincronización, dev: nombre del equipo }.
+  // El token vive en sessionStorage (prepcoach-drive-token) para no pedirlo de nuevo al recargar dentro de la hora.
+  const GD_CLIENT = '562662341088-ag9nqlbroav93l5uf6i6nohu3hrmjavb.apps.googleusercontent.com';
+  const GD_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  const GD_FOLDER = 'PrepCoach', GD_FILE = 'PrepCoach - datos.json';
+  const GD_API = 'https://www.googleapis.com/drive/v3', GD_UP = 'https://www.googleapis.com/upload/drive/v3';
+  const GD = { st: null, token: null, exp: 0, busy: false, again: false, status: 'off', err: '', timer: null, tc: null, cb: null, ecb: null, rev: 0, pending: null, gis: null };
+  function gdState() {
+    if (!GD.st) { try { GD.st = JSON.parse(lsGet('prepcoach-drive') || 'null'); } catch { GD.st = null; } if (!isPlain(GD.st)) GD.st = { on: false }; }
+    return GD.st;
+  }
+  const gdPersist = () => lsSet('prepcoach-drive', JSON.stringify(GD.st));
+  const gdOn = () => MODE === 'local' && !CLIENT && !!gdState().on;
+  // Huella del contenido (FNV-1a), para no subir lo que no cambió.
+  function gdHash(str) { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36) + '.' + str.length; }
+  function gdDevName() {
+    const u = navigator.userAgent || '';
+    const os = /iPhone|iPad/.test(u) ? 'iPhone/iPad' : /Android/.test(u) ? 'Android' : /Mac/.test(u) ? 'Mac' : /Windows/.test(u) ? 'Windows' : /Linux/.test(u) ? 'Linux' : 'Equipo';
+    const br = /Edg\//.test(u) ? 'Edge' : /Firefox\//.test(u) ? 'Firefox' : /Chrome\//.test(u) ? 'Chrome' : /Safari\//.test(u) ? 'Safari' : 'navegador';
+    return `${os} · ${br}`;
+  }
+  function gdTokenOk() {
+    if (!GD.token) { try { const x = JSON.parse(sessionStorage.getItem('prepcoach-drive-token') || 'null'); if (x && x.exp > Date.now()) { GD.token = x.t; GD.exp = x.exp; } } catch { /* sin sessionStorage */ } }
+    return !!GD.token && GD.exp > Date.now() + 60000;
+  }
+  function gdDropToken() { GD.token = null; GD.exp = 0; try { sessionStorage.removeItem('prepcoach-drive-token'); } catch { /* nada */ } }
+  function loadGis() {
+    if (window.google && google.accounts && google.accounts.oauth2) return Promise.resolve();
+    if (GD.gis) return GD.gis;
+    GD.gis = new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://accounts.google.com/gsi/client'; sc.async = true; sc.onload = () => res(); sc.onerror = () => { GD.gis = null; rej(new Error('gis')); }; document.head.appendChild(sc); });
+    return GD.gis;
+  }
+  // Pide el token a Google. Debe llamarse al tocar un botón: Google abre una ventana (la primera vez, para elegir la cuenta
+  // y dar el permiso; después se cierra sola).
+  function gdAuth(first) {
+    return new Promise((res, rej) => {
+      const go = () => {
+        if (!GD.tc) GD.tc = google.accounts.oauth2.initTokenClient({ client_id: GD_CLIENT, scope: GD_SCOPE, callback: (r) => GD.cb && GD.cb(r), error_callback: (e) => GD.ecb && GD.ecb(e) });
+        GD.cb = (r) => {
+          // Si en la ventana de Google se desmarcó el permiso de Drive, no sirve el token.
+          if (r && r.access_token && google.accounts.oauth2.hasGrantedAllScopes && !google.accounts.oauth2.hasGrantedAllScopes(r, GD_SCOPE)) { rej(new Error('scope')); return; }
+          if (r && r.access_token) { GD.token = r.access_token; GD.exp = Date.now() + (+r.expires_in || 3600) * 1000; try { sessionStorage.setItem('prepcoach-drive-token', JSON.stringify({ t: GD.token, exp: GD.exp })); } catch { /* nada */ } res(); }
+          else rej(new Error((r && r.error) || 'auth'));
+        };
+        GD.ecb = (e) => rej(new Error((e && e.type) || 'auth'));
+        GD.tc.requestAccessToken({ prompt: first ? 'select_account' : '' });
+      };
+      if (window.google && google.accounts && google.accounts.oauth2) go(); else loadGis().then(go, rej);
+    });
+  }
+  async function gdFetch(url, opt = {}) {
+    let r;
+    try { r = await fetch(url, Object.assign({}, opt, { headers: Object.assign({ Authorization: 'Bearer ' + GD.token }, opt.headers || {}) })); }
+    catch (e) { throw Object.assign(new Error('offline'), { code: 'offline' }); }
+    if (r.status === 401) { gdDropToken(); throw Object.assign(new Error('401'), { code: 401 }); }
+    if (!r.ok) throw Object.assign(new Error('drive ' + r.status), { code: r.status });
+    return r;
+  }
+  const gdList = async (q) => ((await (await gdFetch(`${GD_API}/files?q=${encodeURIComponent(q)}&spaces=drive&orderBy=modifiedTime%20desc&fields=${encodeURIComponent('files(id,name,version,modifiedTime,appProperties)')}`)).json()).files || []);
+  async function gdFolder() {
+    const st = gdState();
+    if (st.folderId) return st.folderId;
+    let f = (await gdList(`name='${GD_FOLDER}' and mimeType='application/vnd.google-apps.folder' and trashed=false`))[0];
+    if (!f) f = await (await gdFetch(`${GD_API}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: GD_FOLDER, mimeType: 'application/vnd.google-apps.folder' }) })).json();
+    st.folderId = f.id; gdPersist(); return f.id;
+  }
+  // Metadatos del archivo de datos en Drive (o null si aún no existe).
+  async function gdFind() {
+    const st = gdState();
+    if (st.fileId) {
+      try { const m = await (await gdFetch(`${GD_API}/files/${st.fileId}?fields=id,version,modifiedTime,trashed,appProperties`)).json(); if (!m.trashed) return m; }
+      catch (e) { if (e.code !== 404) throw e; }
+      st.fileId = null; st.folderId = null;
+    }
+    const files = st.folderId ? await gdList(`name='${GD_FILE}' and '${st.folderId}' in parents and trashed=false`) : [];
+    let m = files[0];
+    if (!m) { st.folderId = null; m = (await gdList(`name='${GD_FILE}' and trashed=false`))[0]; }
+    st.fileId = m ? m.id : null; gdPersist();
+    return m || null;
+  }
+  // Baja los datos de Drive. Si el archivo no es un respaldo válido de PrepCoach, no se usa (no reemplaza nada).
+  async function gdDownload(id) {
+    let d = null; try { d = JSON.parse(await (await gdFetch(`${GD_API}/files/${id}?alt=media`)).text()); } catch (e) { if (e.code) throw e; }
+    if (!d || !Array.isArray(d.athletes) || !Array.isArray(d.foods)) throw Object.assign(new Error('formato'), { code: 'formato' });
+    return d;
+  }
+  // Sube el estado (texto JSON) en una carga reanudable (los respaldos con fotos pueden pasar de 5 MB).
+  async function gdUpload(body, h) {
+    const st = gdState(), rev = GD.rev, meta = { appProperties: { savedAt: new Date().toISOString(), device: st.dev || gdDevName() } };
+    let url = `${GD_UP}/files/${st.fileId}?uploadType=resumable&fields=id,version,modifiedTime`, method = 'PATCH';
+    if (!st.fileId) { Object.assign(meta, { name: GD_FILE, mimeType: 'application/json', parents: [await gdFolder()] }); url = `${GD_UP}/files?uploadType=resumable&fields=id,version,modifiedTime`; method = 'POST'; }
+    const init = await gdFetch(url, { method, headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': 'application/json' }, body: JSON.stringify(meta) });
+    const loc = init.headers.get('Location'); if (!loc) throw Object.assign(new Error('upload'), { code: 'upload' });
+    let m = await (await gdFetch(loc, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body })).json();
+    if (m.version == null && m.id) m = await (await gdFetch(`${GD_API}/files/${m.id}?fields=id,version,modifiedTime`)).json(); // por si la respuesta no trae la versión
+    Object.assign(st, { fileId: m.id, ver: String(m.version), hash: h, at: Date.now() });
+    if (GD.rev === rev) st.dirty = false; // si se cambió algo mientras subía, queda pendiente para la próxima
+    gdPersist();
+  }
+  // Reemplaza los datos de este equipo por los de Drive.
+  async function gdApply(data, m) {
+    const st = gdState();
+    S = migrate(data); await writeState();
+    Object.assign(st, { ver: String(m.version), hash: gdHash(JSON.stringify(S)), dirty: false, at: Date.now() }); gdPersist();
+    render();
+  }
+  function gdSaveFile(name, text) {
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' })), l = document.createElement('a');
+    l.href = url; l.download = name; document.body.appendChild(l); l.click(); l.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+  // Sincroniza: baja lo nuevo de Drive y sube lo de este equipo. Si los dos cambiaron (o es la primera vez en un equipo
+  // que ya tiene datos), pregunta cuál conservar.
+  async function gdSync() {
+    if (!gdOn()) return;
+    if (GD.busy) { GD.again = true; return; }
+    if (GD.pending) { gdSetStatus('conflict'); return; }
+    if (!gdTokenOk()) { gdSetStatus('auth'); return; }
+    GD.busy = true; gdSetStatus('busy');
+    try {
+      const st = gdState(), local = JSON.stringify(S), h = gdHash(local), m = await gdFind();
+      if (!m) await gdUpload(local, h); // primera vez: Drive aún no tiene datos
+      else if (!st.ver || String(m.version) !== st.ver) {
+        const data = await gdDownload(m.id), localChanged = !st.ver || (st.dirty && h !== st.hash);
+        const empty = !(S.athletes || []).length && !((S.pg && S.pg.clients) || []).length;
+        if (!localChanged || (!st.ver && empty)) await gdApply(data, m);
+        else if (gdHash(JSON.stringify(data)) === h) Object.assign(st, { ver: String(m.version), hash: h, dirty: false, at: Date.now() });
+        else { GD.pending = { kind: st.ver ? 'conflict' : 'first', m, data }; gdPersist(); GD.busy = false; gdSetStatus('conflict'); gdAsk(); return; }
+      } else if (st.dirty && h !== st.hash) await gdUpload(local, h);
+      else Object.assign(st, { dirty: false, at: Date.now() });
+      gdPersist(); GD.err = ''; gdSetStatus(st.dirty ? 'pending' : 'ok');
+    } catch (e) {
+      GD.err = e.code === 'offline' ? 'Sin conexión: los cambios se suben al volver internet.' : e.code === 401 ? 'La sesión de Google venció: toca para reconectar.'
+        : e.code === 'formato' ? 'El archivo de Drive no es un respaldo válido de PrepCoach: no se usó. Revisa la carpeta PrepCoach.' : e.code === 403 ? 'Google no dio permiso para Drive. Toca «Reconectar» y acepta el permiso.' : 'No se pudo sincronizar con Drive. Se reintentará.';
+      gdSetStatus(e.code === 401 ? 'auth' : e.code === 'offline' ? 'offline' : 'error');
+    } finally { GD.busy = false; }
+    if (GD.again) { GD.again = false; gdSync(); }
+  }
+  // Un cambio local guardado: queda pendiente y se sube unos segundos después.
+  function gdChanged() {
+    if (!gdOn()) return;
+    const st = gdState(); st.dirty = true; st.changedAt = Date.now(); gdPersist(); GD.rev++;
+    clearTimeout(GD.timer); GD.timer = setTimeout(() => gdSync(), 4000);
+    if (GD.status !== 'busy' && GD.status !== 'conflict') gdSetStatus(gdTokenOk() ? 'pending' : 'auth');
+  }
+  const GD_TXT = { off: 'Conectar Drive', auth: 'Drive: reconectar', busy: 'Drive: sincronizando…', pending: 'Drive: por subir', ok: 'Drive: sincronizado', offline: 'Drive: sin conexión', error: 'Drive: error', conflict: 'Drive: elegir versión' };
+  function gdSetStatus(s) {
+    const prev = GD.status; GD.status = s;
+    const el = $('#gd-state');
+    if (el) { el.className = `btn sm ghost gd-state gd-${s}`; const t = el.querySelector('.gd-t'); if (t) t.textContent = GD_TXT[s] || ''; el.title = gdTitle(); }
+    // El aviso grande (reconectar o elegir versión) vive en la vista: se redibuja solo cuando aparece o desaparece.
+    const banner = (x) => x === 'auth' || x === 'conflict';
+    if (banner(prev) !== banner(s) && AUTH && ready) render();
+  }
+  function gdTitle() {
+    const st = gdState();
+    if (!st.on) return 'Sincroniza tus datos entre equipos con tu Google Drive';
+    return `${GD_TXT[GD.status] || ''}${st.at ? ` · última sincronización: ${new Date(st.at).toLocaleString('es-CL')}` : ''}${GD.err ? ` · ${GD.err}` : ''}`;
+  }
+  const gdIndicator = () => (MODE === 'local' && !CLIENT ? `<button type="button" class="btn sm ghost gd-state gd-${gdState().on ? GD.status : 'off'}" id="gd-state" data-action="gdMenu" title="${esc(gdTitle())}">${ic('cloud', 15)}<span class="gd-dot"></span><span class="gd-t">${gdState().on ? GD_TXT[GD.status] || '' : GD_TXT.off}</span></button>` : '');
+  // Aviso arriba de la vista cuando hay que reconectar o elegir versión.
+  function gdBanner() {
+    if (!gdOn()) return '';
+    if (GD.status === 'conflict') return `<div class="callout gd-banner warn" role="status">${ic('cloud', 16)}<div><b>Hay que elegir qué versión conservar.</b> Este equipo y tu Drive tienen cambios distintos.</div><button class="btn sm primary" data-action="gdResolve">Elegir versión</button></div>`;
+    if (GD.status === 'auth') return `<div class="callout gd-banner" role="status">${ic('cloud', 16)}<div><b>Conecta Google Drive</b> para traer los cambios de tus otros equipos${gdState().dirty ? ' y subir los de este (hay cambios sin subir)' : ''}.</div><button class="btn sm primary" data-action="gdConnect">Conectar</button></div>`;
+    return '';
+  }
+  // Pregunta qué versión conservar. La otra se descarga como respaldo en este equipo.
+  function gdAsk() {
+    const p = GD.pending; if (!p) return;
+    if ($('#modal-root .modal')) return; // si hay otro diálogo abierto, queda el aviso arriba
+    const st = gdState(), dt = (t) => (t ? new Date(t).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
+    const n = (x) => { const k = ((x && x.athletes) || []).length; return `${k} ${k === 1 ? 'atleta' : 'atletas'}`; };
+    const rT = (p.m.appProperties && p.m.appProperties.savedAt) || p.m.modifiedTime, rDev = (p.m.appProperties && p.m.appProperties.device) || 'otro equipo';
+    const lT = st.changedAt || null, newer = !lT || new Date(rT) > new Date(lT) ? 'drive' : 'local';
+    const first = p.kind === 'first';
+    openModal(`<div class="modal-head"><h3>${first ? 'Ya hay datos de PrepCoach en tu Drive' : 'Hay cambios en dos equipos'}</h3></div>
+      <div class="modal-body"><p class="muted small" style="margin:0 0 10px">${first ? 'Este equipo también tiene datos. Elige cuáles usar desde ahora en todos tus equipos.' : 'Mientras este equipo tenía cambios sin subir, otro equipo guardó una versión distinta en Drive. Elige cuál conservar.'} La que no elijas se descarga como respaldo en este equipo, para que no se pierda nada.</p>
+        <div class="gd-pick">
+          <div class="gd-opt${newer === 'drive' ? ' newer' : ''}"><b>${ic('cloud', 15)} Tu Drive</b><span>Guardada el ${esc(dt(rT))}</span><span>en ${esc(rDev)} · ${n(p.data)}</span>${newer === 'drive' ? '<em>Más reciente</em>' : ''}</div>
+          <div class="gd-opt${newer === 'local' ? ' newer' : ''}"><b>${ic('db', 15)} Este equipo</b><span>${lT ? `Último cambio el ${esc(dt(lT))}` : 'Datos guardados en este navegador'}</span><span>${esc(st.dev || gdDevName())} · ${n(S)}</span>${newer === 'local' ? '<em>Más reciente</em>' : ''}</div>
+        </div></div>
+      <div class="modal-foot"><button class="btn ghost" data-action="closeModal">Decidir después</button><span class="spacer"></span>
+        <button class="btn${newer === 'local' ? ' primary' : ''}" data-action="gdPick" data-v="local">${first ? 'Subir los de este equipo' : 'Usar la de este equipo'}</button>
+        <button class="btn${newer === 'drive' ? ' primary' : ''}" data-action="gdPick" data-v="drive">${first ? 'Usar los de Drive' : 'Usar la de Drive'}</button></div>`, null, true);
   }
 
   // Lecturas en vivo desde la base de datos del Artifact.
@@ -1565,6 +1759,7 @@
     else if (r0 === 'acceso') html = viewAccess();
     else html = viewHome();
     if (loadNote) html = `<div class="callout info" style="margin-bottom:16px">${esc(loadNote)}</div>` + html;
+    if (ready && !isClientView()) html = gdBanner() + html;
     // Conserva el desplazamiento de la página y de las tablas al redibujar en la misma vista
     // (por ejemplo, al elegir un valor en una tabla que se movió hacia el lado).
     const view = curRoute + '|' + (A() ? A().id + '|' + A().ui.trackTab : '');
@@ -1638,6 +1833,7 @@
     const a = A();
     $('#topbar-right').innerHTML = `
       <span class="save-state" id="save-state"><span class="dot"></span>Guardado</span>
+      ${gdIndicator()}
       ${inAth ? `<select class="select" id="athlete-select" style="width:auto;min-width:180px;height:34px" title="Atleta activo">
         ${S.athletes.map((x) => `<option value="${x.id}" ${a && x.id === a.id ? 'selected' : ''}>${esc(x.q.nombre || 'Sin nombre')}</option>`).join('')}
       </select>` : ''}
@@ -4402,6 +4598,54 @@
       l.href = url; l.download = fname; l.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
     importJSON() { $('#json-input').click(); },
+    // ---- Google Drive ----
+    gdMenu() {
+      const st = gdState(); loadGis().catch(() => {});
+      const when = st.at ? new Date(st.at).toLocaleString('es-CL', { dateStyle: 'short', timeStyle: 'short' }) : '—';
+      const body = !st.on
+        ? `<p style="margin:0 0 10px">Guarda tus datos en <b>tu Google Drive</b> para tenerlos en todos tus equipos (computador, celular…). Cada cambio se sube solo unos segundos después; en cada equipo queda además una copia para trabajar sin internet.</p>
+           <ul class="gd-list"><li>Se crea la carpeta <b>${GD_FOLDER}</b> con el archivo <b>${GD_FILE}</b> (el mismo formato que un respaldo ⬇).</li><li>La app solo puede ver los archivos que ella misma crea, no el resto de tu Drive.</li><li>Google te pedirá elegir tu cuenta y dar el permiso. Como la app está en modo de prueba, puede decir «Google no verificó esta app»: toca «Configuración avanzada» → «Ir a PrepCoach».</li></ul>`
+        : `<div class="gd-info"><div><span class="muted small">Estado</span><b>${esc(GD_TXT[GD.status] || '')}</b></div><div><span class="muted small">Última sincronización</span><b>${esc(when)}</b></div><div><span class="muted small">Este equipo</span><b>${esc(st.dev || gdDevName())}</b></div></div>
+           ${GD.err ? `<div class="callout small" style="margin-top:10px">${esc(GD.err)}</div>` : ''}
+           <p class="muted small" style="margin:10px 0 0">Archivo: <b>${GD_FOLDER} › ${GD_FILE}</b>${st.folderId ? ` · <a href="https://drive.google.com/drive/folders/${esc(st.folderId)}" target="_blank" rel="noopener">abrir la carpeta en Drive</a>` : ''}. Drive guarda versiones anteriores del archivo por 30 días.</p>`;
+      openModal(`<div class="modal-head"><h3>${ic('cloud', 18)} Sincronización con Google Drive</h3></div><div class="modal-body">${body}</div>
+        <div class="modal-foot">${st.on ? '<button class="btn ghost danger" data-action="gdOff">Desconectar</button>' : ''}<span class="spacer"></span><button class="btn" data-action="closeModal">Cerrar</button>
+        <button class="btn primary" data-action="gdConnect">${st.on ? (gdTokenOk() ? 'Sincronizar ahora' : 'Reconectar y sincronizar') : 'Conectar con Google'}</button></div>`, null, true);
+    },
+    // Conecta (o reconecta) y sincroniza. Va en un toque: Google abre su ventana para el permiso.
+    gdConnect() {
+      const st = gdState(), first = !st.on;
+      if (GD.pending) { closeModal(); gdAsk(); return; }
+      const go = () => { st.on = true; st.dev = st.dev || gdDevName(); gdPersist(); closeModal(); gdSync(); };
+      if (gdTokenOk()) { go(); return; }
+      gdSetStatus(first ? 'off' : 'busy');
+      gdAuth(first).then(go, (e) => {
+        gdSetStatus(first ? 'off' : 'auth');
+        toast(/popup_failed/i.test(e.message) ? 'El navegador bloqueó la ventana de Google: permite las ventanas emergentes para esta página y vuelve a intentar.'
+          : /popup_closed/i.test(e.message) ? 'Se cerró la ventana de Google antes de terminar. Vuelve a intentar.'
+          : /gis/.test(e.message) ? 'No se pudo cargar Google (¿sin internet?). Vuelve a intentar.'
+          : /scope/.test(e.message) ? 'Falta el permiso de Drive: vuelve a conectar y deja marcada la casilla de Google Drive.' : 'No se completó la conexión con Google Drive.');
+      });
+    },
+    gdResolve() { if (GD.pending) gdAsk(); else gdSync(); },
+    async gdPick(el) {
+      const p = GD.pending; if (!p) { closeModal(); return; }
+      const st = gdState(), day = todayISO();
+      closeModal();
+      if (el.dataset.v === 'drive') {
+        gdSaveFile(`prepcoach-respaldo-${day}-este-equipo.json`, JSON.stringify(S));
+        GD.pending = null; await gdApply(p.data, p.m); gdSetStatus('ok'); toast('Listo: se usan los datos de Drive. Los de este equipo se descargaron como respaldo.');
+      } else {
+        gdSaveFile(`prepcoach-respaldo-${day}-drive.json`, JSON.stringify(p.data));
+        GD.pending = null; st.ver = String(p.m.version); st.dirty = true; st.hash = null; gdPersist();
+        await gdSync(); toast('Listo: se subieron los datos de este equipo. Los de Drive se descargaron como respaldo.');
+      }
+    },
+    gdOff() {
+      confirmModal('Desconectar Google Drive', 'Este equipo deja de sincronizar. Tus datos siguen guardados aquí y en tu Drive; puedes volver a conectar cuando quieras.', () => {
+        const st = gdState(); st.on = false; st.ver = null; st.hash = null; gdPersist(); gdDropToken(); GD.pending = null; closeModal(); gdSetStatus('off'); render(); toast('Google Drive desconectado en este equipo.');
+      }, 'Desconectar');
+    },
     goQ(el, ev) { ev.preventDefault(); if (route()[0] !== 'cuestionario') go('cuestionario'); setTimeout(() => document.getElementById(el.dataset.id)?.scrollIntoView({ behavior: 'smooth' }), 60); },
     print() { window.print(); },
     addSup() { A().q.suplementos.push({ cual: '', dia: '', horario: '', cantidad: '', marca: '' }); commit(); },
@@ -5209,6 +5453,11 @@
       loadNote = 'La sincronización no está disponible en esta vista: los datos se guardan solo en este navegador.';
     }
     S = migrate((await loadState()) || newState());
+    if (gdOn()) { GD.status = gdTokenOk() ? 'busy' : 'auth'; loadGis().catch(() => {}); }
     render();
+    if (gdOn()) gdSync();
+    // Google Drive: al volver a la pestaña trae lo nuevo; al salir sube lo pendiente; al volver internet, reintenta.
+    document.addEventListener('visibilitychange', () => { if (gdOn() && gdTokenOk()) gdSync(); });
+    window.addEventListener('online', () => { if (gdOn()) gdSync(); });
   })();
 })();
