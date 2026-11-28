@@ -760,6 +760,11 @@
     if (s === undefined) { const cs = currentStage(a); s = cs ? cs.s : null; }
     return stageTargets(a, s, dt);
   }
+  // Etapa cuyas metas se ven en el Menú diario: la elegida ahí (a.ui.menuStage) o, si no hay, la vigente. → { s, i } o null.
+  function menuStageOf(a) {
+    const st = stagesOf(a), k = st.findIndex((s) => s.id && s.id === (a.ui && a.ui.menuStage) && stageFull(s));
+    return k >= 0 ? { s: st[k], i: k } : currentStage(a);
+  }
   // Macros de entrenamiento y descanso según los requerimientos de una etapa (sin indicar: la vigente).
   function planMacros(a, s) {
     const tr = a.dayTypes.find((d) => /entren/i.test(d.name)) || a.dayTypes[0];
@@ -1901,12 +1906,12 @@
       </a>`;
   }
   // Aviso en Menú diario y Distribución cuando la etapa vigente no tiene los requerimientos de ese tipo de día.
-  function reqMissing(a, dt) {
+  function reqMissing(a, dt, sel) {
     if (CLIENT || dt._t) return '';
-    const cs = currentStage(a), link = '<a href="#/plan/planif">Plan › Planificación</a>';
+    const cs = sel || currentStage(a), cur = currentStage(a), link = '<a href="#/plan/planif">Plan › Planificación</a>';
     if (!cs) return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>No hay una etapa vigente.</b> Define el objetivo y las fechas de una etapa en ${link} para tener metas de calorías y macros.</div>`;
     if (stageTargets(a, cs.s, dt).ok) return '';
-    return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Faltan los requerimientos de la etapa.</b> La etapa vigente, E${cs.i + 1} «${esc(cs.s.tipo)}», no tiene anotados los de «${esc(dt.name)}». Anótalos o tráelos de la calculadora en ${link}.</div>`;
+    return `<div class="callout alert-callout" role="alert" style="margin-bottom:12px"><b>Faltan los requerimientos de la etapa.</b> La etapa ${cur && cur.s === cs.s ? 'vigente' : 'elegida'}, E${cs.i + 1} «${esc(cs.s.tipo)}», no tiene anotados los de «${esc(dt.name)}». Anótalos o tráelos de la calculadora en ${link}.</div>`;
   }
   // Metas del día en el documento.
   const tgtTxt = (t, html) => (t.ok ? `Objetivo: ${html ? '<b>' : ''}${fmt(t.kcal)} kcal${html ? '</b>' : ''} · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g` : 'Objetivo: faltan los requerimientos de la etapa');
@@ -2346,7 +2351,14 @@
   }
   function viewMenu() {
     if (A().ui.menuView === 'recetas') return `${daySeg(A(), '', true)}${viewRecetario(A())}`;
-    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
+    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), ms = menuStageOf(a), t = dayTargets(a, dt, ms ? ms.s : null), tot = dayTotals(dt);
+    // Etapa de las metas: se elige aquí (a.ui.menuStage); por defecto, la vigente.
+    const cur = currentStage(a), opts = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageFull(x.s));
+    const stLab = (x) => `E${x.i + 1} · ${x.s.tipo}${stageDated(x.s) ? ` · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)}` : ''} (${stageDated(x.s) ? STAGE_ST[stageState(x.s)] : 'sin fechas'})${stageHasReqs(a, x.s) ? '' : ' · sin requerimientos'}`;
+    const stagePick = opts.length ? `<div class="ds-stage"><label class="small muted" for="ms-sel">Metas de la etapa</label>
+        <select class="select ds-stage-sel no-print" id="ms-sel" data-bind="ui.menuStage">${opts.map((x) => `<option value="${esc(x.s.id)}" ${ms && ms.s === x.s ? 'selected' : ''}>${esc(stLab(x))}</option>`).join('')}</select>
+        <span class="print-only small">${ms ? esc(stLab(ms)) : ''}</span>
+        ${ms && cur && ms.s !== cur.s ? `<span class="pill warn ds-stage-note" title="Las metas del menú son las de E${ms.i + 1}. La etapa vigente según las fechas es E${cur.i + 1} «${esc(cur.s.tipo)}».">No es la vigente (E${cur.i + 1})</span>` : ''}</div>` : '';
     const SHORT = { Kcal: 'Kcal', 'Proteínas': 'P', Carbohidratos: 'C', Grasas: 'G' };
     const sumItem = (l, v, tv, u, cls) => { const p = adq(v, tv); return `<div class="sum-item"><div class="si-top"><span class="si-l"><span class="si-full">${l}</span><span class="si-short">${SHORT[l] || l}</span></span><span class="adq ${adqCls(p)}">${p != null ? fmt(p) + '%' : ''}</span></div>
       <div class="si-v"><span class="${cls}">${fmt(v)}</span> <small>/ ${fmt(tv)} ${u}</small></div><div class="progress" style="--c:var(${cls === 'kc' ? '--c-kcal' : cls === 'kp' ? '--c-p' : cls === 'kcarb' ? '--c-c' : '--c-g'})"><span style="width:${clamp(p || 0, 0, 100)}%"></span></div></div>`; };
@@ -2354,10 +2366,10 @@
     ${daySeg(a, `${dt.meals.length && dt.meals.every((m) => collapsed.has(m.id))
       ? `<button class="btn sm ghost" data-action="expandAll">${ic('arrowDown', 14)} Expandir todas</button>`
       : `<button class="btn sm ghost" data-action="collapseAll">${ic('arrowUp', 14)} Contraer todas</button>`}`, true)}
-    ${reqMissing(a, dt)}
+    ${reqMissing(a, dt, ms)}
     <div class="menu-sticky">
     <section class="card day-summary" aria-label="Total diario">
-      <div class="row ds-head"><b>${esc(dt.name)} · total del día</b><span class="muted small ds-sub">Suma de las opciones principales (★) vs. requerimientos de la etapa vigente · adecuación</span></div>
+      <div class="row ds-head"><div class="ds-title"><b>${esc(dt.name)} · total del día</b><span class="muted small ds-sub">Suma de las opciones principales (★) frente a los requerimientos de la etapa elegida · adecuación</span></div>${stagePick}</div>
       <div class="sum-grid">
         ${sumItem('Kcal', tot.kcal, t.kcal, 'kcal', 'kc')}${sumItem('Proteínas', tot.p, t.p, 'g', 'kp')}${sumItem('Carbohidratos', tot.c, t.c, 'g', 'kcarb')}${sumItem('Grasas', tot.g, t.g, 'g', 'kg')}
       </div>

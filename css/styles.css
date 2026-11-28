@@ -475,6 +475,12 @@ tr.selected .eq-radio { border: 4.5px solid var(--accent); }
 .kc { color: var(--c-kcal) !important; } .kp { color: var(--c-p) !important; } .kcarb { color: var(--c-c) !important; } .kg { color: var(--c-g) !important; }
 .day-summary { margin-bottom: 0; padding: 14px 18px; background: var(--glass); backdrop-filter: blur(10px); box-shadow: 0 8px 20px rgb(var(--shade) / calc(.35 * var(--shade-k))); }
 .ds-head { margin-bottom: 10px; }
+/* Etapa de las metas del Menú diario */
+.ds-head { justify-content: space-between; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
+.ds-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ds-stage { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-width: 0; max-width: 100%; }
+.ds-stage-sel { width: auto; min-width: 0; max-width: min(380px, 100%); height: 32px; font-size: 13px; }
+.ds-stage-note { white-space: nowrap; }
 .si-short { display: none; }
 .sum-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 18px; }
 .sum-item .si-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
@@ -841,6 +847,7 @@ button.home-link { font: inherit; color: inherit; text-align: left; cursor: poin
   .menu-sticky { margin-left: -4px; margin-right: -4px; }
   .day-summary { padding: 8px 10px; border-radius: 12px; }
   .ds-head { margin-bottom: 6px; } .ds-sub { display: none; } .ds-head b { font-size: 13px; }
+  .ds-stage label { display: none; } .ds-stage-sel { height: 30px; font-size: 12px; flex: 1 1 160px; }
   .day-summary .sum-grid { grid-template-columns: repeat(4, minmax(0,1fr)); gap: 8px; }
   .day-summary .si-full { display: none; } .day-summary .si-short { display: inline; }
   .day-summary .sum-item .si-v { font-size: 14px; line-height: 1.2; }
