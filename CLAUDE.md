@@ -78,6 +78,8 @@ Forma de trabajar con el usuario:
   - Cada etapa tiene tipo, fechas, requerimientos y metas.
   - `LOSS_TYPES` = Pérdida de grasa, Mini cut y Preparación competencia.
   - Requerimientos (`s.reqs[idTipoDía]`): con `s.macroMode` ausente o `'g'` se anotan `{kcal, p, c, g}` en gramos y al lado se ve su g/kg. Con `'gkg'` se anotan `{pk, ck, gk}` en g/kg; los gramos salen del peso de referencia (`stageRefPeso`: peso inicial de la etapa o, si falta, el promedio de los 7 días previos, el de la 1.ª semana o el peso de Requerimientos) y las kcal se calculan solas. `stageTargets` resuelve ambos modos; al cambiar de modo (`setMacroMode`) se convierten los valores.
+  - En gramos, las kcal se anotan a mano y la columna «Suma de macros» va sumando P×4 + C×4 + G×9 a medida que se escribe cada macro (parcial mientras falte alguno) y muestra la diferencia con las kcal anotadas.
+  - «Copiar de la etapa anterior» (`copyPrevReqs`, desde E2) copia los `reqs` de la etapa i-1 y su `macroMode`; si la etapa ya tiene valores, pide confirmar.
 - **Rangos de pérdida** (solo en etapas de pérdida):
   - `RANGOS`: `mod` (Moderado) va de 0,5 a 1 % semanal y `cons` (Conservador) de 0,3 a 0,5 %. `pers` usa `rmin` y `rmax`.
   - Bajo el rango se marca **Lento**, en azul (no significa malo). Dentro del rango, **Adecuado**. Sobre el rango, **Rápido**.

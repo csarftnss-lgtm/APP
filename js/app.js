@@ -749,6 +749,11 @@
     return { kcal, p, c, g, ok: kcal != null && p != null && c != null && g != null, peso: eff(a).peso };
   }
   const stageHasReqs = (a, s) => !!s && (a.dayTypes || []).some((dt) => stageTargets(a, s, dt).ok);
+  // ¿La etapa tiene algún requerimiento anotado (aunque esté incompleto)?
+  const stageReqsAny = (a, s) => !!s && isPlain(s.reqs) && (a.dayTypes || []).some((dt) => isPlain(s.reqs[dt.id]) && Object.values(s.reqs[dt.id]).some((v) => num(v) != null));
+  // Requerimientos de la etapa en una línea, tal como se anotaron (g/kg o gramos), para avisos.
+  const stageReqLine = (a, s, dt) => { const r = (isPlain(s.reqs) && s.reqs[dt.id]) || {}, v = (x, d = 0) => (num(x) != null ? fmt(num(x), d) : '—');
+    return s.macroMode === 'gkg' ? `P ${v(r.pk, 2)} · C ${v(r.ck, 2)} · G ${v(r.gk, 2)} g/kg` : `${v(r.kcal)} kcal · P ${v(r.p)} g · C ${v(r.c)} g · G ${v(r.g)} g`; };
   // Metas del plan para un tipo de día: las de la etapa indicada o, si no se indica, las de la etapa vigente.
   function dayTargets(a, dt, s) {
     if (dt._t) return dt._t; // plan publicado al cliente: metas ya resueltas por el coach
@@ -3090,11 +3095,15 @@
         return `<tr>${lbl}${mcell(dt, 'pk', 'Proteínas (g/kg)', grams(t.p), kgTip)}${mcell(dt, 'ck', 'Carbohidratos (g/kg)', grams(t.c), kgTip)}${mcell(dt, 'gk', 'Grasas (g/kg)', grams(t.g), kgTip)}
           <td class="num computed nowrap">${t.kcal != null ? `<b title="Proteínas × 4 + carbohidratos × 4 + grasas × 9">${fmt(t.kcal)} kcal</b>` : '<span class="muted">—</span>'}</td>${st}</tr>`;
       }
-      const has = t.p != null && t.c != null && t.g != null, sum = has ? t.p * 4 + t.c * 4 + t.g * 9 : null;
-      const off = sum != null && t.kcal ? Math.abs(sum - t.kcal) / t.kcal > 0.03 : false;
+      // Suma de kcal de los macros: se va armando a medida que se escribe cada uno (las kcal de la etapa se anotan a mano).
+      const parts = [['p', 4, 'proteínas'], ['c', 4, 'carbohidratos'], ['g', 9, 'grasas']], got = parts.filter(([f]) => t[f] != null);
+      const sum = got.length ? got.reduce((x, [f, k]) => x + t[f] * k, 0) : null, has = got.length === 3;
+      const diff = has && t.kcal ? Math.round(sum - t.kcal) : null, off = diff != null && Math.abs(diff) / t.kcal > 0.03;
+      const sub = !has ? `Parcial: faltan ${parts.filter(([f]) => t[f] == null).map(([, , l]) => l).join(' y ')}`
+        : diff == null ? 'Anota las kcal para comparar' : diff === 0 ? 'Igual a las kcal anotadas' : `${fmt(Math.abs(diff))} kcal ${diff > 0 ? 'más' : 'menos'} que las anotadas`;
       return `<tr>${lbl}<td class="pad0">${input(dt, 'kcal', 'Kcal')}</td>
         ${mcell(dt, 'p', 'Proteínas (g)', perKg(t.p), kgTip)}${mcell(dt, 'c', 'Carbohidratos (g)', perKg(t.c), kgTip)}${mcell(dt, 'g', 'Grasas (g)', perKg(t.g), kgTip)}
-        <td class="num computed nowrap">${sum != null ? `<span${off ? ' style="color:var(--warn)"' : ''} title="Proteínas × 4 + carbohidratos × 4 + grasas × 9${off ? ': no coincide con las kcal anotadas' : ''}">${fmt(sum)} kcal</span>` : '<span class="muted">—</span>'}</td>${st}</tr>`;
+        <td class="num computed macro-sum" title="Proteínas × 4 + carbohidratos × 4 + grasas × 9">${sum != null ? `<b${off ? ' class="warn-text"' : ''}>${fmt(sum)} kcal</b><div class="ms-sub${off ? ' warn-text' : ''}">${sub}</div>` : '<span class="muted">—</span>'}</td>${st}</tr>`;
     }).join('');
     const head = gkg
       ? '<th>Tipo de día</th><th class="num">Proteínas (g/kg)</th><th class="num">Carbohidratos (g/kg)</th><th class="num">Grasas (g/kg)</th><th class="num">Kcal (calculadas)</th><th></th>'
@@ -3105,12 +3114,14 @@
       : gkg ? '<span class="warn-text">Falta el peso de referencia: anota el peso inicial de la etapa o el peso en Requerimientos.</span>'
       : '<span class="muted">Sin peso de referencia: la equivalencia en g/kg aparece al anotar el peso inicial de la etapa o el peso en Requerimientos.</span>';
     const calc = a.dayTypes.map((dt) => [dt, calcTargets(a, dt, rc)]).filter(([, t]) => t.ok);
+    const prev = i > 0 ? stagesOf(a)[i - 1] : null, prevHas = stageReqsAny(a, prev);
+    const copyBtn = prev ? `<button class="btn sm" data-action="copyPrevReqs" data-i="${i}" ${prevHas ? '' : 'disabled'} title="${prevHas ? `Copia las kcal y los macros de E${i}${prev.tipo ? ` «${esc(prev.tipo)}»` : ''} en esta etapa` : `E${i} aún no tiene requerimientos anotados`}">${ic('copy', 14)} Copiar de la etapa anterior (E${i})</button>` : '';
     return `<div class="stage-objs stage-reqs mt16">
       <div class="row" style="justify-content:space-between;gap:8px;flex-wrap:wrap"><div class="label" style="margin:0">Requerimientos de la etapa <span class="muted">· por tipo de día</span></div>
-        <button class="btn sm" data-action="pullReqs" data-i="${i}" ${calc.length ? '' : 'disabled'}>${ic('calc', 14)} Traer los requerimientos de la calculadora</button></div>
+        <div class="row req-btns">${copyBtn}<button class="btn sm" data-action="pullReqs" data-i="${i}" ${calc.length ? '' : 'disabled'}>${ic('calc', 14)} Traer los requerimientos de la calculadora</button></div></div>
       <div class="req-mode mt8"><span class="small muted">Macros en</span>${mode}<span class="small">${pesoTxt}</span></div>
       <div class="table-wrap mt8"><table class="t req-table"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>
-      <div class="hint mt8">${gkg ? 'Anota cada macro en gramos por kilo de peso: al lado aparecen los gramos del día y las kcal se calculan solas (proteínas × 4 + carbohidratos × 4 + grasas × 9). ' : 'Al lado de cada macro aparece su equivalencia en gramos por kilo de peso. '}${calc.length
+      <div class="hint mt8">${gkg ? 'Anota cada macro en gramos por kilo de peso: al lado aparecen los gramos del día y las kcal se calculan solas (proteínas × 4 + carbohidratos × 4 + grasas × 9). ' : 'Las kcal se anotan a mano. Al lado de cada macro aparece su equivalencia en gramos por kilo de peso, y «Suma de macros» va sumando sus kcal a medida que los escribes (proteínas × 4 + carbohidratos × 4 + grasas × 9) para compararlas con las kcal anotadas. '}${calc.length
         ? `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) da ahora, en ${ENERGY_L[rc.objetivo].toLowerCase()}: ${calc.map(([dt, t]) => `<b>${esc(dt.name)}</b> ${calcLine(t)}`).join(' · ')}. Al traerlos quedan copiados aquí${gkg ? ' (con sus mismos g/kg)' : ''}: si después cambias la calculadora, esta etapa no cambia hasta que los traigas de nuevo.`
         : `La calculadora (<a href="#/plan/req">Plan › Requerimientos</a>) aún no tiene resultados: complétala para poder traerlos, o anota los requerimientos a mano.`}</div>
     </div>`;
@@ -4425,6 +4436,20 @@
         closeModal(); toast(`Requerimientos traídos a E${i + 1} «${s.tipo}».`); commit();
       };
       if (stageHasReqs(a, s)) confirmModal('Traer requerimientos', `Se reemplazarán los requerimientos anotados en <b>E${i + 1} «${esc(s.tipo)}»</b> por los de la calculadora:<br>${got.map(([dt, t]) => `<b>${esc(dt.name)}</b>: ${calcLine(t)}`).join('<br>')}`, apply, 'Reemplazar');
+      else apply();
+    },
+    // Copia en la etapa las kcal y los macros de la etapa anterior (con su forma de anotarlos: gramos o g/kg).
+    copyPrevReqs(el) {
+      const a = A(), i = +el.dataset.i, st = stagesOf(a), s = st[i], p = st[i - 1]; if (!s || !p) return;
+      if (!stageReqsAny(a, p)) { toast(`E${i} aún no tiene requerimientos anotados.`); return; }
+      const dts = a.dayTypes.filter((dt) => isPlain(p.reqs[dt.id])), name = (x, n) => `E${n}${x.tipo ? ` «${esc(x.tipo)}»` : ''}`;
+      const apply = () => {
+        if (!isPlain(s.reqs)) s.reqs = {};
+        dts.forEach((dt) => { s.reqs[dt.id] = JSON.parse(JSON.stringify(p.reqs[dt.id])); });
+        if (p.macroMode === 'gkg') s.macroMode = 'gkg'; else delete s.macroMode;
+        closeModal(); toast(`Requerimientos de E${i} copiados en E${i + 1}${p.macroMode === 'gkg' ? ' (en g/kg)' : ''}.`); commit();
+      };
+      if (stageReqsAny(a, s)) confirmModal('Copiar de la etapa anterior', `Se reemplazarán los requerimientos anotados en <b>${name(s, i + 1)}</b> por los de <b>${name(p, i)}</b>:<br>${dts.map((dt) => `<b>${esc(dt.name)}</b>: ${stageReqLine(a, p, dt)}`).join('<br>')}`, apply, 'Reemplazar');
       else apply();
     },
     // Macros de la etapa en gramos totales o en g/kg: al cambiar, los valores anotados se convierten con el peso de referencia.
