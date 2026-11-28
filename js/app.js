@@ -765,6 +765,14 @@
     const st = stagesOf(a), k = st.findIndex((s) => s.id && s.id === (a.ui && a.ui.menuStage) && stageFull(s));
     return k >= 0 ? { s: st[k], i: k } : currentStage(a);
   }
+  // Metas de un tipo de día en el Menú diario, la Distribución y el documento (minuta y distribución): las de la etapa elegida
+  // en el Menú diario. El plan publicado al cliente trae las suyas (dt._t).
+  function menuTargets(a, dt) { const ms = menuStageOf(a); return dayTargets(a, dt, ms ? ms.s : null); }
+  // Aviso para el coach: de qué etapa son las metas (y si no es la vigente).
+  function menuStageNote(a) {
+    const ms = menuStageOf(a), cur = currentStage(a); if (!ms) return '';
+    return `<span class="ms-note small">Metas de <b>E${ms.i + 1} «${esc(ms.s.tipo)}»</b>, la etapa elegida en el <a href="#/plan/menu">Menú diario</a>${cur && cur.s !== ms.s ? ` <span class="pill warn">No es la vigente (E${cur.i + 1})</span>` : ''}</span>`;
+  }
   // Macros de entrenamiento y descanso según los requerimientos de una etapa (sin indicar: la vigente).
   function planMacros(a, s) {
     const tr = a.dayTypes.find((d) => /entren/i.test(d.name)) || a.dayTypes[0];
@@ -2217,7 +2225,7 @@
       <div class="modal-foot"><button class="btn ghost" data-action="openMealInMenu" data-id="${m.id}">${ic('menu', 14)} Crear o editar opciones en el Menú diario</button><span class="spacer"></span><button class="btn" data-action="closeModal">Cerrar</button></div>`;
   }
   function viewDist() {
-    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = dayTargets(a, dt);
+    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), t = menuTargets(a, dt);
     // Lista de tiempos de comida (los mismos del Menú diario): comida de ejemplo traída del menú, hora e indicaciones para el atleta.
     const mealImg = (m) => { const o = exOpt(m); return (o && o.image) || null; };
     const n = dt.meals.length, ex = exTotals(dt);
@@ -2267,7 +2275,8 @@
       </div>`;
     return `
     ${daySeg(a)}
-    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso, ex, 'Ejemplo')}</div>` : (reqMissing(a, dt) || '<div class="callout">Faltan los requerimientos de la etapa para ver las calorías y los macros del día.</div>')}
+    ${menuStageNote(a) ? `<div class="ms-note-row">${menuStageNote(a)}</div>` : ''}
+    ${t.ok ? `<div class="dm-sticky" role="group" aria-label="Calorías y macros del día · ${esc(dt.name)}">${targetTiles(t, t.peso, ex, 'Ejemplo')}</div>` : (reqMissing(a, dt, menuStageOf(a)) || '<div class="callout">Faltan los requerimientos de la etapa para ver las calorías y los macros del día.</div>')}
     ${t.ok ? '' : `<div class="callout small" style="margin-bottom:12px"><b>Día de ejemplo:</b> ${fmt(ex.kcal)} kcal · P ${fmt(ex.p)} g · C ${fmt(ex.c)} g · G ${fmt(ex.g)} g</div>`}
     <div class="dm-head">
       <div><h3>Distribución de comidas diarias · ${esc(dt.name)}</h3><div class="sub">${n} ${n === 1 ? 'tiempo de comida' : 'tiempos de comida'} · son los mismos del Menú diario: lo que cambies aquí (nombre, hora, orden) cambia también allá. En cada uno puedes traer la comida del menú que quieras mostrar como ejemplo del día.</div></div>
@@ -2351,7 +2360,7 @@
   }
   function viewMenu() {
     if (A().ui.menuView === 'recetas') return `${daySeg(A(), '', true)}${viewRecetario(A())}`;
-    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), ms = menuStageOf(a), t = dayTargets(a, dt, ms ? ms.s : null), tot = dayTotals(dt);
+    const a = A(), dt = activeDay(a), di = a.dayTypes.indexOf(dt), ms = menuStageOf(a), t = menuTargets(a, dt), tot = dayTotals(dt);
     // Etapa de las metas: se elige aquí (a.ui.menuStage); por defecto, la vigente.
     const cur = currentStage(a), opts = stagesOf(a).map((s, i) => ({ s, i })).filter((x) => stageFull(x.s));
     const stLab = (x) => `E${x.i + 1} · ${x.s.tipo}${stageDated(x.s) ? ` · ${fmtDate(x.s.inicio, true)} – ${fmtDate(x.s.fin, true)}` : ''} (${stageDated(x.s) ? STAGE_ST[stageState(x.s)] : 'sin fechas'})${stageHasReqs(a, x.s) ? '' : ' · sin requerimientos'}`;
@@ -3231,7 +3240,7 @@
     <div class="callout mt16 small"><b>Qué manda cada dato de la etapa.</b>
       <ul class="alert-list">
         <li><b>Fechas:</b> arman las semanas del registro diario y del seguimiento semanal. Cada etapa cuenta sus semanas desde su fecha inicial (la semana 1 empieza ese día) y se compara con los 7 días anteriores.</li>
-        <li><b>Requerimientos de la etapa:</b> los de la etapa vigente son las metas de calorías y macros del menú diario, la distribución, el documento y el plan del cliente; los de cada etapa, los macros de sus semanas en el seguimiento semanal. Se anotan a mano o se traen de la calculadora (Plan › Requerimientos), que no se aplica sola.</li>
+        <li><b>Requerimientos de la etapa:</b> las metas de calorías y macros del menú diario, la distribución y el documento son las de la etapa que eliges en el Menú diario (por defecto, la vigente); el plan del cliente usa la vigente; los de cada etapa, los macros de sus semanas en el seguimiento semanal. Se anotan a mano o se traen de la calculadora (Plan › Requerimientos), que no se aplica sola.</li>
         <li><b>Rango de pérdida (pérdida de grasa, mini cut y preparación):</b> moderado 0,5 – 1 %, conservador 0,3 – 0,5 % o personalizado, y puede cambiar desde una semana de la etapa. Bajo el rango la semana es lenta, dentro es adecuada y sobre el rango es rápida.</li>
         <li><b>Objetivo semanal (% del peso), en las demás etapas:</b> de aumento en ganancia de masa muscular y reverse diet; con signo en mantenimiento y las demás (0 = mantener), con la tolerancia de arriba.</li>
         <li><b>Días de entrenamiento:</b> definen el tipo de día (entrenamiento o descanso) del calendario de alimentación y las comidas de «Hambre» del registro diario.</li>
@@ -3464,7 +3473,7 @@
       <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy && nOn ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
     <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
-      <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span></div>
+      <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span>${docMac(a) ? menuStageNote(a) : ''}</div>
     <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
       ${nOn < parts.length ? '<button class="btn xs ghost" data-action="docAll" data-v="1">Marcar todos</button>' : '<button class="btn xs ghost" data-action="docAll" data-v="0">Desmarcar todos</button>'}</div>
     <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos. La primera hoja lleva la portada y el <b>índice</b>: en el PDF cada línea lleva a su apartado y, al pie de cada hoja, «Volver al índice» regresa a él.</p>
@@ -3549,7 +3558,7 @@
   const minutaLabel = () => 'Descargar planificación';
   // Contenido de la minuta: lo usan el archivo descargado, la impresión y la vista previa (imgOf resuelve cada imagen).
   function minutaBody(a, dt, pmeals, imgOf, head = null) {
-    const t = dayTargets(a, dt), tot = dayTotals(dt), mac = docMac(a);
+    const t = menuTargets(a, dt), tot = dayTotals(dt), mac = docMac(a);
     const meals = pmeals.map(({ m, opts }, i) => `<div class="pm-meal"><h2>${esc(String(m.name || '').trim() || `Comida ${i + 1}`)}${m.time ? ` <span>${esc(m.time)}</span>` : ''}</h2>
       ${opts.map((o, k) => { const ot = optTotals(o); return `<div class="pm-opt">
         <h3>Opción ${k + 1}${o.title ? ' — ' + esc(o.title) : ''}</h3>
@@ -3682,7 +3691,7 @@
     }).join('');
     // 4 · Distribución de comidas: horario e indicaciones de cada comida, por tipo de día
     const dist = a.dayTypes.map((dt) => {
-      const t = dayTargets(a, dt);
+      const t = menuTargets(a, dt);
       return `<div class="pd-day"><div class="pm-head"><div><div class="pm-eyebrow">Distribución de comidas</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
         ${t.ok && mac ? `<div class="pm-targets">Objetivo del día: <b>${fmt(t.kcal)} kcal</b><br>Proteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g</div>` : ''}</div>
         ${dt.meals.length ? `<table class="pd-dist"><thead><tr><th>#</th><th>Tiempo de comida</th><th>Hora</th><th>Comida de ejemplo</th><th>Indicaciones</th></tr></thead><tbody>
@@ -3726,7 +3735,7 @@
       const front = `<div class="mn-paper mn-sheet mn-front">${cover}${secs.length ? tocHtml((e, inner) => `<button type="button" data-action="docJump" data-k="${esc(e.k)}">${inner}</button>`) : ''}</div>`;
       const minHead = (docMinDays(a)[0] || a.dayTypes[0] || {}).id;
       const land = a.dayTypes.map((dt) => {
-        const k = `min:${dt.id}`, pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
+        const k = `min:${dt.id}`, pm = minutaMeals(dt), t = menuTargets(a, dt), tot = dayTotals(dt);
         const head = `${dt.id === minHead ? `<div class="pd-sec-title"><span>${N('min')}</span>Minuta ejemplo</div>` : ''}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
           ${pm.length && mac ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
         const body = pm.length ? minutaGridHTML(dt, pm, imgOf, mac) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
@@ -3924,7 +3933,7 @@
   });
   // Minuta de un solo tipo de día (la que descarga el cliente desde su portal).
   async function minutaPdfDef(a, dt, pm, imgOf) {
-    const kit = pdfKit(), name = a.q.nombre || 'Atleta', t = dayTargets(a, dt), tot = dayTotals(dt), data = minutaGridData(kit, pm, imgOf), mac = docMac(a);
+    const kit = pdfKit(), name = a.q.nombre || 'Atleta', t = menuTargets(a, dt), tot = dayTotals(dt), data = minutaGridData(kit, pm, imgOf), mac = docMac(a);
     const head = () => [
       { columns: [{ width: '*', stack: [{ text: `MINUTA · ${kit.str(dt.name)}`.toUpperCase(), style: 'eyebrow', color: dayScheme(dt).ink }, { text: name, style: 'h1', margin: [0, 2, 0, 0] }] },
         { width: 'auto', text: mac ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '', style: 'meta', alignment: 'right', margin: [0, 10, 0, 0] }], columnGap: 12 },
@@ -3977,7 +3986,7 @@
     const minutas = [], minDays = docMinDays(a);
     for (let di = 0; di < minDays.length; di++) {
       const dt = minDays[di];
-      const pm = minutaMeals(dt), t = dayTargets(a, dt), tot = dayTotals(dt);
+      const pm = minutaMeals(dt), t = menuTargets(a, dt), tot = dayTotals(dt);
       const hd = dayHead('Minuta ejemplo', dt.name, pm.length && mac ? `${tgtTxt(t)}\nMenú (opciones principales): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}` : '');
       hd[0].columns[0].stack[1].id = `min-${dt.id}`; // destino del índice
       // Cada minuta ocupa su propia hoja horizontal (la primera comparte hoja con el título de la sección).
@@ -3995,7 +4004,7 @@
     // 4 · Distribución de las comidas
     const dist = [];
     a.dayTypes.forEach((dt) => {
-      const t = dayTargets(a, dt);
+      const t = menuTargets(a, dt);
       dist.push({ unbreakable: dt.meals.length <= 12, margin: [0, 0, 0, 16], stack: dayHead('Distribución de comidas', dt.name, t.ok && mac ? `Objetivo del día: ${fmt(t.kcal)} kcal\nProteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g` : '').concat(dt.meals.length
         ? [{ table: { headerRows: 1, widths: [16, 84, 30, 180, '*'], body: [[th('#'), th('Tiempo de comida'), th('Hora'), th('Comida de ejemplo'), th('Indicaciones')]].concat(dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = str(eo && eo.title).trim();
             return [{ text: pad(i + 1), color: '#666' }, { text: str(m.name) || `Comida ${i + 1}`, bold: true }, str(m.time) || '—',

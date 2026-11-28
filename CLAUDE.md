@@ -94,7 +94,7 @@ Forma de trabajar con el usuario:
   - **Datos incompletos:** con menos pesajes del mínimo, o comparando con un bloque más antiguo, el % se calcula igual (`logradoInfo().partial`, `rolling7().partial`) y se muestra con la marca «Faltan datos» (`partialTag`). La semana no se evalúa: el estado queda en gris y el mensaje da el % como referencia.
   - El Panel muestra `rolling7`, la media de 7 días frente a los 7 días anteriores.
   - El gráfico muestra una banda con el rango esperado (`expectedAt`) y la media móvil.
-- **Menú diario:** el encabezado «total del día» compara la suma de las opciones ★ con las metas de la etapa elegida en «Metas de la etapa» (`menuStageOf`, guardada en `a.ui.menuStage`; por defecto, la vigente `currentStage`). Si no es la vigente, se avisa. Las demás vistas (resumen, distribución, documento y portal) siguen usando la etapa vigente.
+- **Menú diario:** el encabezado «total del día» compara la suma de las opciones ★ con las metas de la etapa elegida en «Metas de la etapa» (`menuStageOf`, guardada en `a.ui.menuStage`; por defecto, la vigente `currentStage`). Si no es la vigente, se avisa. La Distribución y el documento (minuta y distribución, en la vista previa y el PDF) usan esas mismas metas (`menuTargets`) y lo indican (`menuStageNote`). El resumen del atleta y el plan publicado al cliente siguen con la etapa vigente.
 - **Recetario:**
   - Está en `S.recipes` y es global, compartido entre atletas.
   - Se guarda desde una opción del menú y se agrupa por tiempo de comida.
