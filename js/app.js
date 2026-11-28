@@ -3561,6 +3561,10 @@
       <span class="spacer"></span>
       <button class="btn primary" data-action="printPlan" ${(!dl || cdownloads) && !T.pdfBusy && nOn ? '' : 'disabled'} aria-busy="${T.pdfBusy ? 'true' : 'false'}">${ic('down', 15)} ${T.pdfBusy ? 'Generando PDF…' : minutaLabel()}</button>
     </div>
+    ${(() => { const all = docStagesAll(a), off = docStageOff(a), nOnSt = all.filter((x) => !off.includes(x.s.id)).length;
+      return docOn(a, 'planif') && all.length > 1 ? `<div class="row mn-stages no-print" role="group" aria-label="Etapas que se imprimen en la Planificación"><span class="label mn-picks-l">Etapas en la Planificación:</span>
+        ${all.map((x) => { const on = !off.includes(x.s.id); return `<label class="chip${on ? '' : ' off'}"><input type="checkbox" data-action="docStage" data-id="${esc(x.s.id)}" ${on ? 'checked' : ''}><span class="box"></span>E${x.n} · ${esc(x.s.tipo)}</label>`; }).join('')}
+        <span class="small muted">${nOnSt === all.length ? 'Se imprimen todas.' : `Se ${nOnSt === 1 ? 'imprime' : 'imprimen'} ${nOnSt} de ${all.length}.`}</span></div>` : ''; })()}
     <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
       <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span>${docMac(a) ? menuStageNote(a) : ''}</div>
     <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
@@ -3703,7 +3707,10 @@
     return { months, counts, grid, label: (ym) => `${CAL_M[+ym.slice(5) - 1]} ${ym.slice(0, 4)}` };
   }
   // Etapas para el documento: las que tienen objetivo y además fechas u objetivos escritos.
-  function docStages(a) {
+  // Etapas que se imprimen en la Planificación: todas menos las desmarcadas (a.ui.docStageOff, ids). Conservan su número (E2…).
+  const docStageOff = (a) => (Array.isArray(a.ui.docStageOff) ? a.ui.docStageOff : []);
+  function docStages(a) { const off = docStageOff(a); return docStagesAll(a).filter((x) => !off.includes(x.s.id)); }
+  function docStagesAll(a) {
     const dias = (arr) => (arr || []).slice().sort((x, y) => x - y).map((d) => DOW_N[d].slice(0, 3)).join(', ');
     return stagesOf(a).map((s, i) => ({ s, n: i + 1, objs: (s.objetivos || []).map((x) => String(x || '').trim()).filter(Boolean) }))
       .filter((x) => x.s.tipo && (stageDated(x.s) || x.objs.length)).map((x) => {
@@ -4743,6 +4750,13 @@
     printMenu() { printMenu(); },
     printPlan() { printPlan(); },
     // Apartados que se imprimen: la casilla de cada apartado (en la lista de arriba o sobre su hoja en la vista previa).
+    // Etapa que se imprime (o no) en la Planificación del documento. Queda al menos una.
+    docStage(el) {
+      const a = A(), off = docStageOff(a), id = el.dataset.id, all = docStagesAll(a);
+      if (!off.includes(id) && all.filter((x) => !off.includes(x.s.id)).length <= 1) { el.checked = true; toast('Deja al menos una etapa. Para no imprimir la Planificación, desmarca «Planificación» en «Imprimir».'); return; }
+      a.ui.docStageOff = off.includes(id) ? off.filter((x) => x !== id) : off.concat(id);
+      save(); render();
+    },
     docPart(el) {
       const a = A(), off = docOff(a), k = el.dataset.k;
       a.ui.docOff = off.includes(k) ? off.filter((x) => x !== k) : off.concat(k);

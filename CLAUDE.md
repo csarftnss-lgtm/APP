@@ -111,6 +111,7 @@ Forma de trabajar con el usuario:
 - **Descargar planificación:**
   - `planDocBody` dibuja la vista previa y `planPdfDef` arma el PDF.
   - `a.ui.docOff` lista los apartados que no se imprimen: `planif`, `cal`, `min:<idTipoDía>`, `dist` y `seg`. Los apartados se renumeran.
+  - `a.ui.docStageOff` lista las ids de las etapas que no se imprimen en la Planificación (casillas «Etapas en la Planificación»). `docStages` da las que se imprimen y `docStagesAll`, todas. Siempre queda al menos una, y cada etapa conserva su número (E2…).
   - `a.ui.docMacros` (`docMac`): si es `true`, la minuta y la distribución muestran kcal y macros; por defecto no (el atleta solo ve alimentos y cantidades). La Planificación siempre muestra los requerimientos.
   - La primera hoja lleva la portada y el índice (`id: 'indice'`), con enlaces y número de hoja (`pageReference`) a cada apartado (`sec-<clave>`) y a cada minuta (`min-<idTipoDía>`). Cada apartado parte en hoja nueva y el pie de las hojas 2..N lleva «Volver al índice» (`pdfDoc(..., idx = true)`). Las ids de pdfmake no se pueden repetir en un documento.
   - Los datos bajo los títulos van en tablas, con los nombres arriba y los valores abajo: en cada etapa los requerimientos (una fila por tipo de día), el objetivo y los demás datos (`stageTables`), y el resumen del seguimiento (`docSegInfo`). Ambas vistas usan los mismos datos (`{head, rows, right}`): `infoTableHtml` para la vista previa e `infoTable` en `planPdfDef`.

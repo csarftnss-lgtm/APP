@@ -1796,6 +1796,9 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 
 /* Descargar planificación: casilla de calorías y macros, e índice en la primera hoja de la vista previa */
 .mn-opts { gap: 8px 12px; flex-wrap: wrap; margin: 2px 0 12px; }
+.mn-stages { gap: 6px 8px; flex-wrap: wrap; margin: 2px 0 10px; }
+.mn-stages .chip.off { opacity: .6; }
+@media print { .mn-stages { display: none !important; } }
 .mn-mac { border-radius: 9px; }
 .mn-part, .mn-front { scroll-margin-top: calc(var(--topbar-h, 60px) + 14px); }
 .mn-paper .pd-toc button:focus-visible { outline: 2px solid #8a6a1f; outline-offset: 2px; border-radius: 4px; }
