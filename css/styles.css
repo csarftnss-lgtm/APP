@@ -114,7 +114,9 @@ h1, h2, h3, h4 { margin: 0; letter-spacing: -.01em; }
 .save-state.error { color: var(--bad); }
 
 /* ---------- Layout ---------- */
-.app { max-width: 1440px; margin: 0 auto; padding: 28px 24px 80px; }
+/* La app usa todo el ancho de la ventana: al bajar el zoom del navegador, el contenido se amplía en vez de quedar
+   centrado con espacio libre a los lados. Los márgenes crecen un poco en pantallas anchas. */
+.app { max-width: none; margin: 0; padding: 28px clamp(24px, 1.6vw, 48px) 80px; }
 .page-head { display: flex; align-items: flex-end; gap: 16px; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; }
 .eyebrow { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
 .page-title { font-size: 26px; font-weight: 700; margin-top: 4px; }
@@ -332,7 +334,7 @@ td.sticky-col { background: var(--bg-2) !important; }
 .week-table td { min-width: 130px; }
 
 /* ---------- Plan layout + side panel ---------- */
-.plan-layout { display: grid; grid-template-columns: 256px minmax(0, 1fr); gap: 28px; align-items: start; }
+.plan-layout { display: grid; grid-template-columns: clamp(256px, 13vw, 300px) minmax(0, 1fr); gap: clamp(28px, 1.6vw, 40px); align-items: start; }
 .plan-layout.sb-collapsed { grid-template-columns: 64px minmax(0, 1fr); }
 .plan-main { min-width: 0; }
 .title-sub { color: var(--muted); font-weight: 500; font-size: .7em; }
@@ -1613,7 +1615,7 @@ td.etapa-warn .busc-tag { margin: 2px 6px 4px auto; }
 .fc-brush.add { padding-left: 10px; border-style: dashed; color: var(--muted); }
 .fc-nav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .fc-title { min-width: 170px; text-align: center; font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
-.fc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; max-width: 760px; user-select: none; -webkit-user-select: none; }
+.fc-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; max-width: max(760px, min(100%, 1180px)); user-select: none; -webkit-user-select: none; }
 .fc-dow { font-size: 11px; color: var(--muted); text-align: center; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding-bottom: 2px; }
 .fc-day { position: relative; height: 58px; display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: 2px; padding: 6px 7px; border-radius: 10px; border: 1px solid var(--border); background: var(--bg-2); color: var(--text-2); font: inherit; cursor: pointer; text-align: left; min-width: 0; }
 .fc-day:hover { border-color: var(--border-2); color: var(--text); }

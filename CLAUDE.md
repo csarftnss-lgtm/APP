@@ -50,6 +50,7 @@ Forma de trabajar con el usuario:
 
 ## 5. Arquitectura
 - `index.html` solo tiene la estructura y carga `css/styles.css`, `js/foods.js` y `js/app.js`.
+- **Ancho:** `.app` no tiene ancho máximo: usa todo el ancho de la ventana, así que al bajar el zoom del navegador el contenido se amplía en vez de quedar centrado. El panel lateral (`.plan-layout`) mide `clamp(256px, 13vw, 300px)`. La vista previa del documento mantiene el ancho de una hoja A4.
 - `js/app.js` es una sola IIFE con toda la lógica, de unas 4.800 líneas.
 - `js/foods.js` define `window.SEED_FOODS` como `[name, porcion, gpp, kcal, p, c, g]`.
 - **Persistencia:**
