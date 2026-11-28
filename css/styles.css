@@ -1822,6 +1822,9 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .mn-paper .nt-add { color: #8a6a1f; font-style: italic; font-weight: 600; padding: 2px 4px; }
 .mn-paper td .nt-edit { min-height: 1.4em; }
 .mn-paper .pd-goal-add { display: inline-block; margin: 6px 0 2px 4px; }
+/* Textos que se ven en la vista previa pero no se imprimen (nota al pie del resumen del seguimiento) */
+.mn-paper .pd-screen-tag { display: inline-block; margin-right: 5px; padding: 0 5px; border: 1px dashed #d8b15f; border-radius: 4px; background: #f6f1e4; color: #8a6a1f; font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px; }
+@media print { .pd-screen-only { display: none !important; } }
 .mn-paper .pd-goals li > .nt-edit { padding: 1px 4px; }
 @media print { .mn-stages { display: none !important; } }
 .mn-mac { border-radius: 9px; }
