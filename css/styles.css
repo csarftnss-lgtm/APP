@@ -485,7 +485,8 @@ tr.selected .eq-radio { border: 4.5px solid var(--accent); }
 .ds-stage-note { white-space: nowrap; }
 /* De qué etapa son las metas (Distribución y Descargar planificación) */
 .ms-note-row { margin: 0 0 10px; }
-.ms-note { display: inline-flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; color: var(--muted); }
+.ms-note { color: var(--muted); line-height: 1.6; }
+.ms-note .pill { margin-left: 6px; vertical-align: 1px; }
 .mn-opts .ms-note { flex-basis: 100%; }
 .si-short { display: none; }
 .sum-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 18px; }
@@ -729,6 +730,10 @@ ul.steps { padding-left: 18px; }
   .topbar { gap: 14px; }
   .brand-text, .save-state { display: none; }
   #athlete-select { min-width: 140px !important; max-width: 200px; }
+  .mainnav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .mainnav a { padding: 7px 9px; }
+  .topbar-right { gap: 6px; flex: none; }
+  .logout-btn span { display: none; }
   .home-sections { grid-template-columns: 1fr; }
   .status-hero { grid-template-columns: 1fr 1fr; }
   .g4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -1295,9 +1300,11 @@ html:has(.dm-sticky) { scroll-padding-top: calc(var(--topbar-h, 60px) + env(safe
 .dm-head h3 { font-size: 16px; font-weight: 650; }
 .dm-head .sub { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .dm-list { display: grid; gap: 14px; }
-.dm-item { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px 20px; padding: 16px; }
+.dm-item { display: grid; grid-template-columns: 230px minmax(0, 1fr); grid-template-areas: "name name" "left right"; gap: 16px 20px; padding: 16px; }
+.dm-left { grid-area: left; } .dm-right { grid-area: right; }
+@media (min-width: 1600px) { .dm-item { grid-template-columns: 230px minmax(0, 1.35fr) minmax(340px, 1fr); grid-template-areas: "left name right"; } }
 .dm-left { display: grid; gap: 10px; align-content: start; min-width: 0; }
-.dm-name { grid-column: 1 / -1; display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.dm-name { grid-area: name; display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .dm-name .meal-idx { width: 38px; height: 38px; font-size: 16px; }
 /* Nombre completo siempre visible: el campo crece hacia abajo según el texto (el ::after replica el contenido y fija la altura) */
 .dm-name-wrap { flex: 1 1 220px; min-width: 0; display: grid; }
@@ -1328,7 +1335,7 @@ html:has(.dm-sticky) { scroll-padding-top: calc(var(--topbar-h, 60px) + env(safe
 .dm-actions { display: flex; gap: 4px; }
 .dm-ind .textarea { flex: 1; min-height: 116px; }
 @media (max-width: 720px) {
-  .dm-item { grid-template-columns: minmax(0, 1fr); padding: 14px; }
+  .dm-item { grid-template-columns: minmax(0, 1fr); grid-template-areas: "name" "left" "right"; padding: 14px; }
   .dm-img { aspect-ratio: 16 / 9; }
 }
 /* Recuadros finales editables */
@@ -1676,7 +1683,7 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 
 /* Distribución de comidas: comida de ejemplo traída del Menú diario */
 .dm-ex { display: grid; gap: 8px; justify-items: start; margin-top: 8px; width: 100%; }
-.dm-ex-foods { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 18px; font-size: 13px; color: var(--text-2); }
+.dm-ex-foods { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 2px 18px; font-size: 13px; color: var(--text-2); }
 .dm-ex-foods li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px dashed var(--border); min-width: 0; }
 .dm-ex-foods li span { min-width: 0; overflow-wrap: anywhere; }
 .dm-ex-foods li b { color: var(--text); font-weight: 600; white-space: nowrap; }

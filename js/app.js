@@ -2427,10 +2427,12 @@
     </section>`;
   }
 
-  // Diferencia frente a la opción (o fuente) ★: menos → verde, igual (redondeada a lo que se muestra) → azul, más → rojo.
+  // Diferencia frente a la opción (o fuente) ★: menos → verde, igual → azul, más → rojo. «Igual» tiene un margen:
+  // ±10 kcal (d = 0) o ±1 g en los macros (d = 1).
+  const DIFF_TOL = { kcal: 10, g: 1 };
   function diffTag(x, d = 0, suf = '') {
-    const r = Math.round(x * Math.pow(10, d)) / Math.pow(10, d), k = r < 0 ? 'less' : r > 0 ? 'more' : 'same';
-    return `<span class="eq-d ${k}" title="${r < 0 ? 'Menos que la ★' : r > 0 ? 'Más que la ★' : 'Igual que la ★'}">${r > 0 ? '+' : r < 0 ? '−' : '±'}${fmt(Math.abs(r), d)}${suf}</span>`;
+    const r = Math.round(x * Math.pow(10, d)) / Math.pow(10, d), tol = d ? DIFF_TOL.g : DIFF_TOL.kcal, k = Math.abs(r) <= tol ? 'same' : r < 0 ? 'less' : 'more';
+    return `<span class="eq-d ${k}" title="${k === 'less' ? 'Menos que la ★' : k === 'more' ? 'Más que la ★' : `Igual que la ★ (margen ±${tol} ${d ? 'g' : 'kcal'})`}">${r > 0 ? '+' : r < 0 ? '−' : '±'}${fmt(Math.abs(r), d)}${suf}</span>`;
   }
   // Editor de una opción por pasos: una columna por lista con sus fuentes. Cada fuente muestra su aporte y su adecuación: lo que
   // cubre de la meta del día (etapa elegida) en el macro de su lista y, frente a la fuente ★ de la lista, la diferencia.
@@ -2508,7 +2510,7 @@
           <div class="eq-l">Esta opción (${i + 1}.${oi + 1})</div><div class="eq-c"><b>${fmt(tot.kcal)}</b></div><div class="eq-c"><b>${fmt(tot.p, 1)}</b></div><div class="eq-c"><b>${fmt(tot.c, 1)}</b></div><div class="eq-c"><b>${fmt(tot.g, 1)}</b></div>
           <div class="eq-l">Diferencia</div><div class="eq-c">${dv(tot.kcal, main.kcal)}</div><div class="eq-c">${dv(tot.p, main.p, 1)}</div><div class="eq-c">${dv(tot.c, main.c, 1)}</div><div class="eq-c">${dv(tot.g, main.g, 1)}</div>
         </div>
-        <div class="small muted mt8 eq-legend"><span class="eq-d less">Verde</span> menos que la ★ · <span class="eq-d same">Azul</span> igual · <span class="eq-d more">Rojo</span> más que la ★</div>
+        <div class="small muted mt8 eq-legend"><span class="eq-d less">Verde</span> menos que la ★ · <span class="eq-d same">Azul</span> igual (±10 kcal · ±1 g) · <span class="eq-d more">Rojo</span> más que la ★</div>
       </div>` : '';
     return `<section class="card meal ${col ? 'collapsed' : ''}" id="meal-${m.id}">
       <div class="meal-top" data-action="toggleMeal" data-id="${m.id}">
