@@ -1821,6 +1821,8 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .mn-paper .nt-edit:hover, .mn-paper .nt-edit:focus-visible { background: rgb(var(--accent-rgb) / .12); outline-style: solid; }
 .mn-paper .nt-add { color: #8a6a1f; font-style: italic; font-weight: 600; padding: 2px 4px; }
 .mn-paper td .nt-edit { min-height: 1.4em; }
+.mn-paper .pd-goal-add { display: inline-block; margin: 6px 0 2px 4px; }
+.mn-paper .pd-goals li > .nt-edit { padding: 1px 4px; }
 @media print { .mn-stages { display: none !important; } }
 .mn-mac { border-radius: 9px; }
 .mn-part, .mn-front { scroll-margin-top: calc(var(--topbar-h, 60px) + 14px); }

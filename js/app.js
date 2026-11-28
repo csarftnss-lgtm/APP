@@ -3574,7 +3574,7 @@
     <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
       <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span>${docMac(a) ? menuStageNote(a) : ''}</div>
     <div class="row mn-notes-bar no-print"><button type="button" class="btn sm${T.docNotes ? ' primary' : ''}" data-action="docNotesMode" aria-pressed="${!!T.docNotes}">${ic(T.docNotes ? 'check' : 'edit', 14)} ${T.docNotes ? 'Listo' : 'Editar notas'}</button>
-      <span class="small muted">${T.docNotes ? 'Toca una nota marcada en la vista previa para editarla, o «+» para agregarla. Se guarda en su lugar (Menú diario o Distribución). Las marcas no salen en el PDF.' : 'Edita aquí las notas que se imprimen: las de cada opción y las generales del día en la minuta, y las indicaciones de cada comida, «Cómo organizarte» y «Tip» en la distribución.'}</span></div>
+      <span class="small muted">${T.docNotes ? 'Toca una nota marcada en la vista previa para editarla, o «+» para agregarla. Se guarda en su lugar (Planificación, Menú diario o Distribución). Las marcas no salen en el PDF.' : 'Edita aquí los textos que se imprimen: los objetivos de cada etapa en la Planificación, las notas de cada opción y las generales del día en la minuta, y las indicaciones de cada comida, «Cómo organizarte» y «Tip» en la distribución.'}</span></div>
     <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
       ${nOn < parts.length ? '<button class="btn xs ghost" data-action="docAll" data-v="1">Marcar todos</button>' : '<button class="btn xs ghost" data-action="docAll" data-v="0">Desmarcar todos</button>'}</div>
     <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos. La primera hoja lleva la portada y el <b>índice</b>: en el PDF cada línea lleva a su apartado y, al pie de cada hoja, «Volver al índice» regresa a él.</p>
@@ -3783,10 +3783,17 @@
     const nl = (s) => esc(s).replace(/\n/g, '<br>'), mac = docMac(a), edNotes = sheets && !!T.docNotes;
     // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
     const ds = docStages(a);
+    // Modo «Editar notas»: cada objetivo escrito se edita al tocarlo y al final va «+ Agregar objetivo» (se guardan en la etapa).
+    const goalsEdit = (x) => {
+      const si = x.n - 1, where = `Plan › Planificación › E${x.n} › Objetivos de la etapa`;
+      const items = (Array.isArray(x.s.objetivos) ? x.s.objetivos : []).map((o, j) => [String(o || '').trim(), j]).filter(([o]) => o);
+      return `${items.length ? `<ol class="pd-goals">${items.map(([o, j], k) => `<li>${noteSpot(true, `tracking.config.stages.${si}.objetivos.${j}`, `Objetivo ${k + 1} · E${x.n}`, where, nl(o))}</li>`).join('')}</ol>` : ''}
+        <div class="nt-edit nt-add pd-goal-add" role="button" tabindex="0" data-action="addObjNote" data-i="${si}" data-w="${esc(where)}" title="Agregar un objetivo a E${x.n} (se guarda en ${esc(where)})">+ Agregar objetivo</div>`;
+    };
     const planif = ds.length ? ds.map((x) => `<div class="pd-stage">
         <div class="pd-stage-h"><span class="pd-stage-n">E${x.n}</span><b>${esc(x.s.tipo)}</b><span>${x.range}</span></div>
         ${stageTables(x).map(infoTableHtml).join('')}
-        ${x.objs.length ? `<ol class="pd-goals">${x.objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Sin objetivos definidos para esta etapa.</p>'}
+        ${edNotes ? goalsEdit(x) : x.objs.length ? `<ol class="pd-goals">${x.objs.map((o) => `<li>${nl(o)}</li>`).join('')}</ol>` : '<p class="pd-empty">Sin objetivos definidos para esta etapa.</p>'}
       </div>`).join('') : '<p class="pd-empty">Aún no se han definido etapas en Plan › Planificación.</p>';
     // 2 · Calendario de alimentación: los meses con días asignados
     const cd = calDocData(a);
@@ -4791,11 +4798,31 @@
       const path = el.dataset.p, label = el.dataset.l || 'Nota', where = el.dataset.w || ''; if (!path) return;
       const k = path.startsWith('distNotes.') ? path.slice(10) : null, cur = getP(path);
       const val = cur != null ? String(cur) : k ? String(DIST_NOTES[k] || '') : '';
-      promptModal(`Editar · ${esc(label)}`, `<div class="muted small" style="margin-bottom:8px">Se guarda en <b>${esc(where)}</b>: el cambio también se ve ahí.${k ? ' Si la dejas vacía, este recuadro no se imprime.' : ' Si la dejas vacía, no se imprime.'}</div>
+      const obj = path.match(/^tracking\.config\.stages\.(\d+)\.objetivos\.(\d+)$/);
+      promptModal(`Editar · ${esc(label)}`, `<div class="muted small" style="margin-bottom:8px">Se guarda en <b>${esc(where)}</b>: el cambio también se ve ahí.${k ? ' Si la dejas vacía, este recuadro no se imprime.' : obj ? ' Si lo dejas vacío, el objetivo se quita de la etapa.' : ' Si la dejas vacía, no se imprime.'}</div>
         <textarea class="textarea" id="m-note" rows="8" style="width:100%">${esc(val)}</textarea>`, () => {
-        setP(path, $('#m-note').value.replace(/\s+$/, '')); closeModal(); commit(); toast(`${label}: guardado.`);
+        const v = $('#m-note').value.replace(/\s+$/, '');
+        if (obj && !v.trim()) { // objetivo vacío: se quita de la lista (si es el único, queda en blanco como al crear la etapa)
+          const s = stagesOf(A())[+obj[1]], list = s && Array.isArray(s.objetivos) ? s.objetivos : null;
+          if (list && list.length > 1) list.splice(+obj[2], 1); else if (list) list[0] = '';
+          closeModal(); commit(); toast('Objetivo quitado.'); return;
+        }
+        setP(path, v); closeModal(); commit(); toast(`${label}: guardado.`);
       }, 'Guardar');
       setTimeout(() => { const t = $('#m-note'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }, 30);
+    },
+    // Agrega un objetivo a una etapa desde la vista previa del documento (ocupa el primer espacio en blanco, si hay).
+    addObjNote(el) {
+      const a = A(), i = +el.dataset.i, s = stagesOf(a)[i], where = el.dataset.w || ''; if (!s) return;
+      promptModal(`Agregar objetivo · E${i + 1}`, `<div class="muted small" style="margin-bottom:8px">Se guarda en <b>${esc(where)}</b>: también se ve ahí.</div>
+        <textarea class="textarea" id="m-note" rows="5" style="width:100%" placeholder="Ej.: Llegar a 10.000 pasos diarios."></textarea>`, () => {
+        const v = $('#m-note').value.replace(/\s+$/, ''); if (!v.trim()) { closeModal(); return; }
+        if (!Array.isArray(s.objetivos)) s.objetivos = [];
+        const blank = s.objetivos.findIndex((x) => !String(x || '').trim());
+        if (blank >= 0) s.objetivos[blank] = v; else s.objetivos.push(v);
+        closeModal(); commit(); toast(`Objetivo agregado a E${i + 1}.`);
+      }, 'Agregar');
+      setTimeout(() => $('#m-note')?.focus(), 30);
     },
     docJump(el) { const t = document.querySelector(`.mn-part[data-part="${CSS.escape(el.dataset.k)}"]`); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
     docAll(el) { const a = A(); a.ui.docOff = el.dataset.v === '1' ? [] : docParts(a).map(([k]) => k); save(); render(); },
@@ -5066,7 +5093,7 @@
     // Enter en cualquier campo de la ficha «Nuevo alimento» la guarda.
     else if (ev.key === 'Enter' && ev.target.dataset?.bind?.startsWith('#foodDraft.')) { ev.preventDefault(); actions.saveFood(); }
     // Enter o espacio sobre una nota editable de la vista previa la abre (igual que tocarla).
-    else if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList?.contains('nt-edit')) { ev.preventDefault(); actions.editNote(ev.target); }
+    else if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList?.contains('nt-edit') && actions[ev.target.dataset.action]) { ev.preventDefault(); actions[ev.target.dataset.action](ev.target); }
   });
 
   $('#file-input').addEventListener('change', async (ev) => {
