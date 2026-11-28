@@ -2427,6 +2427,11 @@
     </section>`;
   }
 
+  // Diferencia frente a la opción (o fuente) ★: menos → verde, igual (redondeada a lo que se muestra) → azul, más → rojo.
+  function diffTag(x, d = 0, suf = '') {
+    const r = Math.round(x * Math.pow(10, d)) / Math.pow(10, d), k = r < 0 ? 'less' : r > 0 ? 'more' : 'same';
+    return `<span class="eq-d ${k}" title="${r < 0 ? 'Menos que la ★' : r > 0 ? 'Más que la ★' : 'Igual que la ★'}">${r > 0 ? '+' : r < 0 ? '−' : '±'}${fmt(Math.abs(r), d)}${suf}</span>`;
+  }
   // Editor de una opción por pasos: una columna por lista con sus fuentes. Cada fuente muestra su aporte y su adecuación: lo que
   // cubre de la meta del día (etapa elegida) en el macro de su lista y, frente a la fuente ★ de la lista, la diferencia.
   function stepsEditor(o, op, t, tot) {
@@ -2447,7 +2452,7 @@
               <button class="btn xs ghost icon danger no-print" data-action="delLine" data-p="${ip}" data-i="${li}" title="Quitar alimento" aria-label="Quitar alimento">${ic('x', 12)}</button>
             </div></div>`;
         }).join('');
-        const d = !on && ref ? v - ref[mk] : null, dOk = d != null && Math.abs(d) <= Math.max(mk === 'kcal' ? 25 : 2, Math.abs(ref[mk]) * 0.05);
+        const d = !on && ref ? v - ref[mk] : null;
         return `<div class="sp-src${on ? ' on' : ''}">
           <div class="sp-src-head">
             <button type="button" class="sp-star" data-action="stepPick" data-p="${sp}" data-k="${k}" aria-pressed="${on}" title="${on ? 'Fuente de referencia: es la que suma al aporte de la comida' : 'Usar esta fuente como referencia en el aporte de la comida'}">${on ? '★' : '☆'}</button>
@@ -2458,7 +2463,7 @@
           ${lines || '<div class="muted small">Sin alimentos.</div>'}
           <button type="button" class="btn xs ghost sp-addline no-print" data-action="addLine" data-p="${ip}">${ic('plus', 12)} Alimento</button>
           <div class="sp-tot"><span class="kc">${fmt(x.kcal)} kcal</span> · <span class="kp">P ${fmt(x.p, 1)}</span> · <span class="kcarb">C ${fmt(x.c, 1)}</span> · <span class="kg">G ${fmt(x.g, 1)}</span></div>
-          <div class="sp-adq"><b>${fmt(v, md)} ${mu}${mn ? ' ' + mn : ''}</b>${goal ? ` · <b class="${on ? 'kc' : ''}">${fmt((v / goal) * 100)} %</b> del día` : ''}${d != null ? ` <span class="eq-d ${dOk ? 'ok' : 'off'}">${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d), md)} vs. ★</span>` : ''}</div>
+          <div class="sp-adq"><b>${fmt(v, md)} ${mu}${mn ? ' ' + mn : ''}</b>${goal ? ` · <b class="${on ? 'kc' : ''}">${fmt((v / goal) * 100)} %</b> del día` : ''}${d != null ? ` ${diffTag(d, md, ' vs. ★')}` : ''}</div>
         </div>`;
       }).join('');
       return `<div class="sp-col">
@@ -2494,8 +2499,7 @@
     const col = collapsed.has(m.id), main = optTotals(m.options[m.sel] || m.options[0]);
     // Equivalencia con la opción principal (★): visible al crear o editar otra opción de la misma comida.
     const selN = `${i + 1}.${(m.sel || 0) + 1}`, cmp = oi !== m.sel;
-    const dv = (v, ref, d = 0) => { const x = v - ref, ok = Math.abs(x) <= Math.max(d ? 2 : 25, Math.abs(ref) * 0.05);
-      return `<span class="eq-d ${ok ? 'ok' : 'off'}">${x > 0 ? '+' : x < 0 ? '−' : '±'}${fmt(Math.abs(x), d)}</span>`; };
+    const dv = (v, ref, d = 0) => diffTag(v - ref, d);
     const eqBox = cmp ? `<div class="eq-box">
         <div class="eq-head">${ic('star', 15)}<b>Equivalencia con ★ Opción ${selN}</b><span class="muted small">la opción que cuenta en el total del día</span></div>
         <div class="eq-grid">
@@ -2504,7 +2508,7 @@
           <div class="eq-l">Esta opción (${i + 1}.${oi + 1})</div><div class="eq-c"><b>${fmt(tot.kcal)}</b></div><div class="eq-c"><b>${fmt(tot.p, 1)}</b></div><div class="eq-c"><b>${fmt(tot.c, 1)}</b></div><div class="eq-c"><b>${fmt(tot.g, 1)}</b></div>
           <div class="eq-l">Diferencia</div><div class="eq-c">${dv(tot.kcal, main.kcal)}</div><div class="eq-c">${dv(tot.p, main.p, 1)}</div><div class="eq-c">${dv(tot.c, main.c, 1)}</div><div class="eq-c">${dv(tot.g, main.g, 1)}</div>
         </div>
-        <div class="small muted mt8">Verde = equivalente (±5 %, o ±25 kcal / ±2 g). Ámbar = conviene ajustar porciones.</div>
+        <div class="small muted mt8 eq-legend"><span class="eq-d less">Verde</span> menos que la ★ · <span class="eq-d same">Azul</span> igual · <span class="eq-d more">Rojo</span> más que la ★</div>
       </div>` : '';
     return `<section class="card meal ${col ? 'collapsed' : ''}" id="meal-${m.id}">
       <div class="meal-top" data-action="toggleMeal" data-id="${m.id}">

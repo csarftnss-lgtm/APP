@@ -844,6 +844,11 @@ button.home-link { font: inherit; color: inherit; text-align: left; cursor: poin
 .eq-d { font-weight: 700; font-size: 12px; padding: 1px 6px; border-radius: 6px; }
 .eq-d.ok { color: var(--ok); background: rgb(var(--ok-rgb) / .12); }
 .eq-d.off { color: var(--warn); background: var(--warn-soft); }
+/* Diferencia frente a la ★: menos (verde), igual (azul), más (rojo) */
+.eq-d.less { color: var(--ok); background: rgb(var(--ok-rgb) / .12); }
+.eq-d.same { color: var(--info); background: rgb(var(--info-rgb) / .14); }
+.eq-d.more { color: var(--bad); background: var(--bad-soft); }
+.eq-legend .eq-d { font-size: 11px; }
 
 /* Opción por pasos: listas (columnas) con sus fuentes; la fuente ★ de cada lista suma al aporte */
 .opt-steps-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 1px 5px; }

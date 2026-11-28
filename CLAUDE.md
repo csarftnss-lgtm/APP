@@ -102,6 +102,7 @@ Forma de trabajar con el usuario:
   - `o.steps = [{ id, name, macro: 'c'|'p'|'g'|'kcal', sel, items: [{ id, foods: [línea…] }] }]`; `o.foods` queda vacío. Parte con Carbohidratos (c), Proteínas (p), Ensaladas (kcal) y Frutas (c), editables. Cada fuente (`item`) tiene uno o más alimentos.
   - En cada lista cuenta la fuente ★ (`sel`): `optLines(o)` da las líneas que suman (`optTotals`, total del día, Distribución). `optAllLines(o)` da todas (para imprimir y saber si un alimento se usa).
   - Cada fuente muestra su aporte, el % de la meta del día (etapa elegida) en el macro de su lista y la diferencia frente a la ★.
+- **Diferencias frente a la ★** (`diffTag`): en «Equivalencia con ★», en la fila de diferencia de la tabla y en las fuentes por pasos, menos = verde (`less`), igual (redondeada a lo que se muestra, ±0) = azul (`same`), más = rojo (`more`). Igual para kcal y los tres macros.
   - Al imprimir (`optPrint`) van todas las fuentes de cada lista («Carbohidratos · elige 1»); una fuente con varios alimentos va en una fila («Lechuga + Tomate»). Igual en el portal del cliente (`planSnapshot` incluye `steps`), el recetario y copiar/pegar.
   - Campo opcional: las opciones existentes no cambian, así que no hubo migración.
 - **Recetario:**
