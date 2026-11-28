@@ -1814,6 +1814,13 @@ button.next-stage { width: 100%; text-align: left; font: inherit; cursor: pointe
 .mn-opts { gap: 8px 12px; flex-wrap: wrap; margin: 2px 0 12px; }
 .mn-stages { gap: 6px 8px; flex-wrap: wrap; margin: 2px 0 10px; }
 .mn-stages .chip.off { opacity: .6; }
+/* «Editar notas» en la vista previa: cada nota que se imprime queda marcada y se edita al tocarla */
+.mn-notes-bar { gap: 8px 12px; flex-wrap: wrap; margin: 2px 0 10px; }
+@media print { .mn-notes-bar { display: none !important; } }
+.mn-paper .nt-edit { outline: 1.5px dashed rgb(var(--accent-rgb) / .8); outline-offset: 2px; border-radius: 4px; cursor: pointer; transition: background-color .15s; }
+.mn-paper .nt-edit:hover, .mn-paper .nt-edit:focus-visible { background: rgb(var(--accent-rgb) / .12); outline-style: solid; }
+.mn-paper .nt-add { color: #8a6a1f; font-style: italic; font-weight: 600; padding: 2px 4px; }
+.mn-paper td .nt-edit { min-height: 1.4em; }
 @media print { .mn-stages { display: none !important; } }
 .mn-mac { border-radius: 9px; }
 .mn-part, .mn-front { scroll-margin-top: calc(var(--topbar-h, 60px) + 14px); }

@@ -3573,6 +3573,8 @@
         <span class="small muted">${nOnSt === all.length ? 'Se imprimen todas.' : `Se ${nOnSt === 1 ? 'imprime' : 'imprimen'} ${nOnSt} de ${all.length}.`}</span></div>` : ''; })()}
     <div class="row mn-opts no-print"><label class="chip mn-mac"><input type="checkbox" data-action="docMacros" ${docMac(a) ? 'checked' : ''}><span class="box"></span>Incluir calorías y macros en la minuta y la distribución</label>
       <span class="small muted">${docMac(a) ? 'Cada opción y cada día muestran sus kcal y macros.' : 'El atleta solo ve los alimentos y sus cantidades, sin kcal ni macros.'}</span>${docMac(a) ? menuStageNote(a) : ''}</div>
+    <div class="row mn-notes-bar no-print"><button type="button" class="btn sm${T.docNotes ? ' primary' : ''}" data-action="docNotesMode" aria-pressed="${!!T.docNotes}">${ic(T.docNotes ? 'check' : 'edit', 14)} ${T.docNotes ? 'Listo' : 'Editar notas'}</button>
+      <span class="small muted">${T.docNotes ? 'Toca una nota marcada en la vista previa para editarla, o «+» para agregarla. Se guarda en su lugar (Menú diario o Distribución). Las marcas no salen en el PDF.' : 'Edita aquí las notas que se imprimen: las de cada opción y las generales del día en la minuta, y las indicaciones de cada comida, «Cómo organizarte» y «Tip» en la distribución.'}</span></div>
     <div class="row mn-pick-sum no-print"><span class="small ${nOn ? 'muted' : 'warn-text'}">${nOn ? `Se imprimen <b>${nOn} de ${parts.length}</b> apartados. Marca o desmarca la casilla de cada apartado (aquí o sobre cada hoja de la vista previa).` : 'Marca al menos un apartado para descargar la planificación.'}</span>
       ${nOn < parts.length ? '<button class="btn xs ghost" data-action="docAll" data-v="1">Marcar todos</button>' : '<button class="btn xs ghost" data-action="docAll" data-v="0">Desmarcar todos</button>'}</div>
     <p class="mn-info muted small">Vista previa hoja por hoja, tal como sale el <b>PDF</b> (A4). Las minutas van en hojas horizontales, una por tipo de día, con todas sus comidas y opciones en una sola hoja. En la minuta solo entran las opciones que tienen alimentos. La primera hoja lleva la portada y el <b>índice</b>: en el PDF cada línea lleva a su apartado y, al pie de cada hoja, «Volver al índice» regresa a él.</p>
@@ -3778,7 +3780,7 @@
     return DOC_SECS.filter(([k]) => (k === 'min' ? docMinDays(a).length > 0 : docOn(a, k))).map(([key, title]) => ({ key, title, n: ++n }));
   }
   function planDocBody(a, imgOf, sheets = false) {
-    const nl = (s) => esc(s).replace(/\n/g, '<br>'), mac = docMac(a);
+    const nl = (s) => esc(s).replace(/\n/g, '<br>'), mac = docMac(a), edNotes = sheets && !!T.docNotes;
     // 1 · Planificación: cada etapa con sus fechas, metas y objetivos
     const ds = docStages(a);
     const planif = ds.length ? ds.map((x) => `<div class="pd-stage">
@@ -3806,12 +3808,13 @@
         ${t.ok && mac ? `<div class="pm-targets">Objetivo del día: <b>${fmt(t.kcal)} kcal</b><br>Proteínas ${fmt(t.p)} g · Carbohidratos ${fmt(t.c)} g · Grasas ${fmt(t.g)} g</div>` : ''}</div>
         ${dt.meals.length ? `<table class="pd-dist"><thead><tr><th>#</th><th>Tiempo de comida</th><th>Hora</th><th>Comida de ejemplo</th><th>Indicaciones</th></tr></thead><tbody>
           ${dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = String((eo && eo.title) || '').trim();
-            return `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${et || ef.length ? `${et ? `<b>${esc(et)}</b>` : ''}${ef.length ? `<div class="pd-ex">${ef.map(([fn, c]) => esc(c ? `${fn} (${c})` : fn)).join(' · ')}</div>` : ''}` : '<span class="pd-mute">—</span>'}</td><td>${String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`; }).join('')}
+            return `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${et || ef.length ? `${et ? `<b>${esc(et)}</b>` : ''}${ef.length ? `<div class="pd-ex">${ef.map(([fn, c]) => esc(c ? `${fn} (${c})` : fn)).join(' · ')}</div>` : ''}` : '<span class="pd-mute">—</span>'}</td><td>${edNotes ? noteSpot(true, `dayTypes.${a.dayTypes.indexOf(dt)}.meals.${i}.indic`, 'Indicaciones', `Distribución › ${dt.name} › ${String(m.name || '').trim() || `Comida ${i + 1}`}`, String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '') : String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`; }).join('')}
         </tbody></table>
         ${mac ? `<p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => optLines(exOpt(m))) })}</b></p>` : ''}` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
     }).join('');
     const noteOf = (k) => String((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
-    const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).map(([k, l]) => `<div class="pd-note"><b>${l}.</b> ${nl(noteOf(k))}</div>`).join('');
+    const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k) || edNotes)
+      .map(([k, l]) => noteSpot(edNotes, `distNotes.${k}`, l, `Distribución › recuadro «${l}»`, noteOf(k) ? `<b>${l}.</b> ${nl(noteOf(k))}` : '', 'pd-note')).join('');
     // 5 · Resumen del seguimiento semanal: desde la semana inicial hasta la actual
     const cw = currentWeek(a), cfg = cfgOf(a), ks = Array.from({ length: cw + 1 }, (_, k) => k);
     const withAvg = ks.filter((k) => weekAvg(a, k) != null), any = withAvg.some((k) => weekWeights(a, k).length) || ks.some((k) => weekSteps(a, k) != null || SCALES.some(([f]) => weekField(a, k, f).avg != null));
@@ -3848,7 +3851,7 @@
         const k = `min:${dt.id}`, pm = minutaMeals(dt), t = menuTargets(a, dt), tot = dayTotals(dt);
         const head = `${dt.id === minHead ? `<div class="pd-sec-title"><span>${N('min')}</span>Minuta ejemplo</div>` : ''}<div class="pm-head"><div><div class="pm-eyebrow">Minuta ejemplo</div><h2 class="pd-h">${esc(dt.name)}</h2></div>
           ${pm.length && mac ? `<div class="pm-targets">${tgtTxt(t, true)}<br>Menú (opciones ★): ${fmt(tot.kcal)} kcal · P ${fmt(tot.p)} · C ${fmt(tot.c)} · G ${fmt(tot.g)}</div>` : ''}</div>`;
-        const body = pm.length ? minutaGridHTML(dt, pm, imgOf, mac) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
+        const body = pm.length ? minutaGridHTML(dt, pm, imgOf, mac, edNotes ? { base: `dayTypes.${a.dayTypes.indexOf(dt)}` } : null) : '<p class="pd-empty">Este tipo de día aún no tiene opciones con alimentos en el Menú diario.</p>';
         return part(k, `Minuta · ${dt.name}`, `<div class="mn-sheet mn-land-wrap"><div class="mn-paper mn-land"><div class="mg-fit pm-scheme" style="${schemeStyle(dayScheme(dt))}">${head}${body}</div></div></div>`);
       }).join('');
       return front + part('planif', 'Planificación', sheet('planif', sec(N('planif'), 'Planificación', planif, false)))
@@ -3862,7 +3865,14 @@
     return cover + tocHtml((e, inner) => `<a href="#${esc(e.id)}">${inner}</a>`) + secs.map((x) => sec(x.n, x.title, html[x.key], true, x.key)).join('');
   }
   // Minuta horizontal en HTML para la vista previa: misma estructura que el PDF (fila por comida, columna por opción).
-  function minutaGridHTML(dt, pm, imgOf, mac = true) {
+  // Nota que se imprime, editable en la vista previa de «Descargar planificación» (modo «Editar notas», T.docNotes).
+  // ed: true en ese modo. path: dato donde se guarda (el mismo del Menú diario o la Distribución). Sin texto, en modo
+  // edición se ve «+ label» para agregarla; fuera de ese modo, una nota vacía no se muestra.
+  function noteSpot(ed, path, label, where, html, cls = '') {
+    if (!ed) return html ? `<div class="${cls}">${html}</div>` : '';
+    return `<div class="${cls} nt-edit${html ? '' : ' nt-add'}" role="button" tabindex="0" data-action="editNote" data-p="${esc(path)}" data-l="${esc(label)}" data-w="${esc(where)}" title="Editar: ${esc(label)} (se guarda en ${esc(where)})">${html || `+ ${esc(label)}`}</div>`;
+  }
+  function minutaGridHTML(dt, pm, imgOf, mac = true, ed = null) {
     // Una sola cuadrícula: la columna de los tiempos de comida toma el ancho del título más largo y el resto queda para las opciones.
     const rows = pm.map(({ m, opts }, i) => {
       const cells = opts.map((o, k) => {
@@ -3874,12 +3884,12 @@
           ${img ? `<img class="mg-img" src="${img}" alt="">` : ''}
           ${pr.steps ? steps : `<table class="mg-ft"><tbody>${foods}</tbody></table>`}
           ${mac ? `<div class="mg-tot">${pr.steps ? 'Referencia: ' : ''}${fmt(ot.kcal)} kcal · P ${fmt(ot.p, 1)} g · C ${fmt(ot.c, 1)} g · G ${fmt(ot.g, 1)} g</div>` : ''}
-          ${o.notes ? `<div class="mg-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
+          ${noteSpot(ed, ed ? `${ed.base}.meals.${dt.meals.indexOf(m)}.options.${m.options.indexOf(o)}.notes` : '', 'Notas de la opción', `Menú diario › ${String(m.name || '').trim() || `Comida ${i + 1}`} › Opción ${m.options.indexOf(o) + 1}`, o.notes ? `<b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}` : '', 'mg-notes')}</div>`;
       }).join('');
       return `<div class="mg-row"><div class="mg-meal"><b>${esc(String(m.name || '').trim() || `Comida ${i + 1}`)}</b>${m.time ? `<span>${esc(m.time)}</span>` : ''}</div>
         <div class="mg-opts" style="grid-template-columns:repeat(${opts.length},minmax(0,1fr))">${cells}</div></div>`;
     }).join('');
-    return `<div class="mg-grid">${rows}</div>` + (dt.notes ? `<div class="mg-notes mg-day"><b>Notas generales:</b> ${esc(dt.notes).replace(/\n/g, '<br>')}</div>` : '');
+    return `<div class="mg-grid">${rows}</div>` + noteSpot(ed, ed ? `${ed.base}.notes` : '', 'Notas generales del día', `Menú diario › ${dt.name} › Notas generales del día`, dt.notes ? `<b>Notas generales:</b> ${esc(dt.notes).replace(/\n/g, '<br>')}` : '', 'mg-notes mg-day');
   }
   // Hoja horizontal A4 a 96 ppp (1123 × 794 px) con los márgenes del PDF; se escala para caber en la pantalla.
   const LAND_PX = { w: 1123, h: 794, avail: 794 - 53 - 61 };
@@ -4775,6 +4785,18 @@
       save(); render();
     },
     docMacros() { const a = A(); a.ui.docMacros = !docMac(a); save(); render(); },
+    docNotesMode() { T.docNotes = !T.docNotes; render(); },
+    // Edita una nota desde la vista previa del documento; se guarda en su dato (Menú diario o Distribución).
+    editNote(el) {
+      const path = el.dataset.p, label = el.dataset.l || 'Nota', where = el.dataset.w || ''; if (!path) return;
+      const k = path.startsWith('distNotes.') ? path.slice(10) : null, cur = getP(path);
+      const val = cur != null ? String(cur) : k ? String(DIST_NOTES[k] || '') : '';
+      promptModal(`Editar · ${esc(label)}`, `<div class="muted small" style="margin-bottom:8px">Se guarda en <b>${esc(where)}</b>: el cambio también se ve ahí.${k ? ' Si la dejas vacía, este recuadro no se imprime.' : ' Si la dejas vacía, no se imprime.'}</div>
+        <textarea class="textarea" id="m-note" rows="8" style="width:100%">${esc(val)}</textarea>`, () => {
+        setP(path, $('#m-note').value.replace(/\s+$/, '')); closeModal(); commit(); toast(`${label}: guardado.`);
+      }, 'Guardar');
+      setTimeout(() => { const t = $('#m-note'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); } }, 30);
+    },
     docJump(el) { const t = document.querySelector(`.mn-part[data-part="${CSS.escape(el.dataset.k)}"]`); if (t) t.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }); },
     docAll(el) { const a = A(); a.ui.docOff = el.dataset.v === '1' ? [] : docParts(a).map(([k]) => k); save(); render(); },
 
@@ -5043,6 +5065,8 @@
     else if (ev.key === 'Enter' && ev.target.hasAttribute && ev.target.hasAttribute('data-oneline')) { ev.preventDefault(); ev.target.blur(); }
     // Enter en cualquier campo de la ficha «Nuevo alimento» la guarda.
     else if (ev.key === 'Enter' && ev.target.dataset?.bind?.startsWith('#foodDraft.')) { ev.preventDefault(); actions.saveFood(); }
+    // Enter o espacio sobre una nota editable de la vista previa la abre (igual que tocarla).
+    else if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.classList?.contains('nt-edit')) { ev.preventDefault(); actions.editNote(ev.target); }
   });
 
   $('#file-input').addEventListener('change', async (ev) => {
