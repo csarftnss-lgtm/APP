@@ -366,6 +366,7 @@
   const planOf = (snap) => { const s = Object.assign({}, snap); delete s.updatedAt; return stable(s); };
   function planSnapshot(a) {
     const used = new Map();
+    const pubLines = (ls) => (ls || []).filter((l) => foodById(l.foodId)).map((l) => { const f = foodById(l.foodId); used.set(f.id, f); return { foodId: f.id, cantidad: l.cantidad || '', porciones: num(l.porciones) }; });
     const dayTypes = a.dayTypes.map((dt) => {
       const t = dayTargets(a, dt); // requerimientos de la etapa vigente
       return {
@@ -377,7 +378,9 @@
           ...(String(m.indic || '').trim() ? { indic: m.indic } : {}),
           options: m.options.map((o) => ({
             id: o.id, title: o.title || '', image: o.image || null, notes: o.notes || '',
-            foods: o.foods.filter((l) => foodById(l.foodId)).map((l) => { const f = foodById(l.foodId); used.set(f.id, f); return { foodId: f.id, cantidad: l.cantidad || '', porciones: num(l.porciones) }; }),
+            foods: pubLines(o.foods),
+            // Por pasos: solo si la opción lo es, para no marcar como «cambiado» un plan ya publicado.
+            ...(isSteps(o) ? { steps: o.steps.map((st) => ({ id: st.id, name: st.name || '', macro: st.macro || 'kcal', sel: stepSelIdx(st), items: stepItems(st).map((it) => ({ id: it.id, foods: pubLines(it.foods) })) })) } : {}),
           })),
         })),
       };
@@ -857,11 +860,42 @@
     if (!f) return { f: null, kcal: 0, p: 0, c: 0, g: 0, gramos: null };
     return { f, kcal: f.kcal * por, p: f.p * por, c: f.c * por, g: f.g * por, gramos: f.gpp ? f.gpp * por : null };
   }
-  function optTotals(o) {
+  // ---- Opciones por pasos ----
+  // Una opción por pasos tiene listas (Carbohidratos, Proteínas, Ensaladas, Frutas…, editables) y en cada lista varias fuentes
+  // (uno o más alimentos). El atleta elige una fuente de cada lista; en el plan cuenta la fuente marcada con ★ en cada lista.
+  // o.steps = [{ id, name, macro: 'c'|'p'|'g'|'kcal' (con qué se comparan sus fuentes), sel, items: [{ id, foods: [línea…] }] }].
+  // Sin o.steps la opción es la de siempre (o.foods); en una opción por pasos o.foods queda vacío.
+  const isSteps = (o) => !!o && Array.isArray(o.steps);
+  const stepItems = (st) => (Array.isArray(st && st.items) ? st.items : []);
+  const stepSelIdx = (st) => clamp(Math.round(+((st && st.sel) || 0)) || 0, 0, Math.max(0, stepItems(st).length - 1));
+  const lineHas = (l) => !!(l && (l.foodId || String(l.foodName || '').trim()));
+  // Líneas que cuentan en el aporte: las de la opción o, por pasos, las de la fuente ★ de cada lista.
+  const optLines = (o) => (isSteps(o) ? o.steps.flatMap((st) => { const it = stepItems(st)[stepSelIdx(st)]; return (it && it.foods) || []; }) : (o && o.foods) || []);
+  // Todas las líneas (por pasos, las de todas las fuentes): para saber si hay algo que imprimir o si un alimento se usa.
+  const optAllLines = (o) => (isSteps(o) ? o.steps.flatMap((st) => stepItems(st).flatMap((it) => it.foods || [])) : (o && o.foods) || []);
+  function linesTotals(ls) {
     const t = { kcal: 0, p: 0, c: 0, g: 0 };
-    (o?.foods || []).forEach((l) => { const x = lineCalc(l); t.kcal += x.kcal; t.p += x.p; t.c += x.c; t.g += x.g; });
+    (ls || []).forEach((l) => { const x = lineCalc(l); t.kcal += x.kcal; t.p += x.p; t.c += x.c; t.g += x.g; });
     return t;
   }
+  function optTotals(o) { return linesTotals(optLines(o)); }
+  const STEP_DEFAULTS = [['Carbohidratos', 'c'], ['Proteínas', 'p'], ['Ensaladas', 'kcal'], ['Frutas', 'c']];
+  const STEP_MACROS = [['c', 'Carbohidratos'], ['p', 'Proteínas'], ['g', 'Grasas'], ['kcal', 'Kcal']];
+  const newStepItem = () => ({ id: uid(), foods: [{ foodId: null, foodName: '', cantidad: '', porciones: 1 }] });
+  const newStep = (name = 'Nueva lista', macro = 'kcal') => ({ id: uid(), name, macro, sel: 0, items: [newStepItem()] });
+  const newStepsOption = () => Object.assign(newOption(), { steps: STEP_DEFAULTS.map(([n, m]) => newStep(n, m)) });
+  // ¿Opción sin nada anotado? (una opción por pasos nunca cuenta como vacía)
+  const optEmpty = (o) => !o.title && !o.image && !(o.foods || []).length && !o.notes && !isSteps(o);
+  // Lo que se imprime de una opción: { foods: [[alimento, cantidad]] } o, por pasos, { steps: [{ name, srcs: [[alimentos, cantidades]] }] }.
+  // Una fuente con varios alimentos va en una fila: «Lechuga + Tomate» · «1 taza + 1 unidad».
+  function optPrint(o, str = (x) => String(x == null ? '' : x)) {
+    const fl = (l) => { const x = lineCalc(l); return [str(x.f ? x.f.name : l.foodName).trim(), str(l.cantidad).trim()]; };
+    if (!isSteps(o)) return { foods: ((o && o.foods) || []).filter(lineHas).map(fl), steps: null };
+    const steps = o.steps.map((st) => ({ name: str(st.name).trim() || 'Lista', srcs: stepItems(st).map((it) => (it.foods || []).filter(lineHas).map(fl)).filter((x) => x.length)
+      .map((fs) => [fs.map(([n]) => n).join(' + '), fs.some(([, q]) => q) ? fs.map(([, q]) => q || '—').join(' + ') : '']) })).filter((x) => x.srcs.length);
+    return { foods: [], steps };
+  }
+  const stepHead = (x) => `${x.name}${x.srcs.length > 1 ? ' · elige 1' : ''}`;
   function dayTotals(dt) {
     const t = { kcal: 0, p: 0, c: 0, g: 0 };
     dt.meals.forEach((m) => { const o = m.options[m.sel] || m.options[0]; const x = optTotals(o); t.kcal += x.kcal; t.p += x.p; t.c += x.c; t.g += x.g; });
@@ -2198,7 +2232,7 @@
     return k >= 0 ? k : clamp(m.sel || 0, 0, Math.max(0, m.options.length - 1));
   }
   const exOpt = (m) => m.options[exIndex(m)] || null;
-  const optFoods = (o) => ((o && o.foods) || []).filter((l) => l.foodId || String(l.foodName || '').trim())
+  const optFoods = (o) => optLines(o).filter((l) => l.foodId || String(l.foodName || '').trim())
     .map((l) => { const x = lineCalc(l); return [x.f ? x.f.name : String(l.foodName || ''), String(l.cantidad || '').trim()]; });
   const optMacros = (o) => { const t = optTotals(o); return `${fmt(t.kcal)} kcal · P ${fmt(t.p)} g · C ${fmt(t.c)} g · G ${fmt(t.g)} g`; };
   // Total del día de ejemplo: suma de la comida de ejemplo de cada tiempo de comida.
@@ -2393,6 +2427,55 @@
     </section>`;
   }
 
+  // Editor de una opción por pasos: una columna por lista con sus fuentes. Cada fuente muestra su aporte y su adecuación: lo que
+  // cubre de la meta del día (etapa elegida) en el macro de su lista y, frente a la fuente ★ de la lista, la diferencia.
+  function stepsEditor(o, op, t, tot) {
+    const MAC = { c: ['C', 'g', 'de carbohidratos', 1], p: ['P', 'g', 'de proteínas', 1], g: ['G', 'g', 'de grasas', 1], kcal: ['Kcal', 'kcal', '', 0] };
+    const cols = o.steps.map((st, si) => {
+      const sp = `${op}.steps.${si}`, items = stepItems(st), mk = MAC[st.macro] ? st.macro : 'kcal', [, mu, mn, md] = MAC[mk];
+      const selI = stepSelIdx(st), ref = items[selI] ? linesTotals(items[selI].foods) : null, goal = t && t.ok ? t[mk] : null;
+      const srcs = items.map((it, k) => {
+        const ip = `${sp}.items.${k}`, x = linesTotals(it.foods), on = k === selI, v = x[mk];
+        const lines = (it.foods || []).map((l, li) => {
+          const y = lineCalc(l), lp = `${ip}.foods.${li}`, fName = y.f ? y.f.name : (l.foodName || '');
+          return `<div class="sp-line">
+            <input class="cell sp-food ${!y.f && fName ? 'invalid' : ''}" data-food="${lp}" value="${esc(fName)}" placeholder="Buscar alimento…" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="food-dd" aria-label="Alimento">
+            <div class="sp-line2">
+              <label class="qty-field sp-qty">${ic('edit', 12)}${I(`${lp}.cantidad`, { cls: 'qty-input', ph: 'Cantidad (ej.: 150 g)', attrs: 'aria-label="Cantidad indicada para el atleta"' })}</label>
+              <span class="sp-n" title="Porciones de intercambio${y.f && y.f.porcion ? ` (1 porción = ${esc(y.f.porcion)})` : ''}">${I(`${lp}.porciones`, { cls: 'cell', num: true, live: true, ph: '0', attrs: 'aria-label="Porciones"' })}<small>porc.</small></span>
+              ${y.f && y.f.gpp ? `<span class="sp-n"><input class="cell num" inputmode="decimal" data-grams="${lp}" data-gpp="${y.f.gpp}" value="${y.gramos != null ? r1(y.gramos) : ''}" placeholder="g" aria-label="Gramos"><small>g</small></span>` : ''}
+              <button class="btn xs ghost icon danger no-print" data-action="delLine" data-p="${ip}" data-i="${li}" title="Quitar alimento" aria-label="Quitar alimento">${ic('x', 12)}</button>
+            </div></div>`;
+        }).join('');
+        const d = !on && ref ? v - ref[mk] : null, dOk = d != null && Math.abs(d) <= Math.max(mk === 'kcal' ? 25 : 2, Math.abs(ref[mk]) * 0.05);
+        return `<div class="sp-src${on ? ' on' : ''}">
+          <div class="sp-src-head">
+            <button type="button" class="sp-star" data-action="stepPick" data-p="${sp}" data-k="${k}" aria-pressed="${on}" title="${on ? 'Fuente de referencia: es la que suma al aporte de la comida' : 'Usar esta fuente como referencia en el aporte de la comida'}">${on ? '★' : '☆'}</button>
+            <span class="sp-src-n">Fuente ${k + 1}</span><span class="spacer"></span>
+            ${clip && clip.kind === 'food' ? `<button type="button" class="btn xs ghost icon no-print" data-action="pasteLine" data-p="${ip}" title="Pegar aquí: ${esc(clip.label)}" aria-label="Pegar alimento">${ic('paste', 12)}</button>` : ''}
+            <button type="button" class="btn xs ghost icon danger no-print" data-action="delStepItem" data-p="${sp}" data-k="${k}" title="Quitar esta fuente" aria-label="Quitar fuente ${k + 1}">${ic('trash', 12)}</button>
+          </div>
+          ${lines || '<div class="muted small">Sin alimentos.</div>'}
+          <button type="button" class="btn xs ghost sp-addline no-print" data-action="addLine" data-p="${ip}">${ic('plus', 12)} Alimento</button>
+          <div class="sp-tot"><span class="kc">${fmt(x.kcal)} kcal</span> · <span class="kp">P ${fmt(x.p, 1)}</span> · <span class="kcarb">C ${fmt(x.c, 1)}</span> · <span class="kg">G ${fmt(x.g, 1)}</span></div>
+          <div class="sp-adq"><b>${fmt(v, md)} ${mu}${mn ? ' ' + mn : ''}</b>${goal ? ` · <b class="${on ? 'kc' : ''}">${fmt((v / goal) * 100)} %</b> del día` : ''}${d != null ? ` <span class="eq-d ${dOk ? 'ok' : 'off'}">${d > 0 ? '+' : d < 0 ? '−' : '±'}${fmt(Math.abs(d), md)} vs. ★</span>` : ''}</div>
+        </div>`;
+      }).join('');
+      return `<div class="sp-col">
+        <div class="sp-head"><input class="sp-name" data-bind="${sp}.name" data-live value="${esc(st.name || '')}" placeholder="Nombre de la lista" aria-label="Nombre de la lista ${si + 1}">
+          <button type="button" class="btn xs ghost icon danger no-print" data-action="delStep" data-p="${op}" data-i="${si}" title="Quitar esta lista" aria-label="Quitar la lista ${esc(st.name || '')}">${ic('trash', 13)}</button></div>
+        <div class="sp-cmp"><span class="small muted">Comparar por</span>${SEL(`${sp}.macro`, STEP_MACROS, { cls: 'select sp-macro', attrs: 'aria-label="Macro con que se comparan las fuentes de la lista"' })}</div>
+        ${srcs || '<div class="muted small">Sin fuentes.</div>'}
+        <button type="button" class="btn sm sp-add no-print" data-action="addStepItem" data-p="${sp}">${ic('plus', 13)} Fuente</button>
+      </div>`;
+    }).join('');
+    return `<div class="sp-wrap">
+      <div class="small muted sp-intro">Por pasos: en cada lista el atleta elige <b>una</b> fuente. La fuente marcada con <b>★</b> en cada lista es la de referencia: la suma de las ★ es el aporte de esta opción en el total del día. El % de cada fuente es lo que cubre de la meta del día (etapa elegida arriba) en el macro de su lista.</div>
+      <div class="sp-grid">${cols || '<div class="muted">Sin listas. Agrega la primera.</div>'}</div>
+      <div class="row sp-foot"><button type="button" class="btn sm no-print" data-action="addStep" data-p="${op}">${ic('plus', 13)} Lista</button><span class="spacer"></span>
+        <span class="sp-sum">Aporte de las fuentes ★: <b class="kc">${fmt(tot.kcal)} kcal</b> · <span class="kp">P ${fmt(tot.p, 1)} g</span> · <span class="kcarb">C ${fmt(tot.c, 1)} g</span> · <span class="kg">G ${fmt(tot.g, 1)} g</span></span></div>
+    </div>`;
+  }
   function mealCard(a, dt, di, m, i, t) {
     const mi = `dayTypes.${di}.meals.${i}`;
     const oi = clamp(m.active || 0, 0, m.options.length - 1), o = m.options[oi], op = `${mi}.options.${oi}`;
@@ -2437,8 +2520,9 @@
       </div>
       <div class="meal-content" ${col ? 'hidden' : ''}>
       <div class="opt-tabs">
-        ${m.options.map((x, k) => `<button class="opt-tab ${k === oi ? 'active' : ''}" data-action="viewOpt" data-m="${mi}" data-k="${k}">${k === m.sel ? '<span class="star">★</span>' : ''}Opción ${i + 1}.${k + 1}</button>`).join('')}
+        ${m.options.map((x, k) => `<button class="opt-tab ${k === oi ? 'active' : ''}" data-action="viewOpt" data-m="${mi}" data-k="${k}">${k === m.sel ? '<span class="star">★</span>' : ''}Opción ${i + 1}.${k + 1}${isSteps(x) ? ' <span class="opt-steps-tag">por pasos</span>' : ''}</button>`).join('')}
         <button class="btn xs ghost" data-action="addOpt" data-m="${mi}">${ic('plus', 13)} Opción</button>
+        <button class="btn xs ghost" data-action="addStepsOpt" data-m="${mi}" title="Opción armada por pasos: listas de carbohidratos, proteínas, ensaladas y frutas; el atleta elige una fuente de cada lista">${ic('plus', 13)} Por pasos</button>
         <span class="spacer"></span>
         ${oi !== m.sel ? `<button class="btn xs" data-action="setMain" data-m="${mi}" data-k="${oi}">★ Usar en el total del día</button>` : '<span class="small muted">★ Cuenta en el total del día</span>'}
         <button class="btn xs" data-action="copyTo" data-m="${mi}" data-k="${oi}" title="Copiar esta opción o la comida completa a otro tipo de día">${ic('send', 13)} Copiar a otro día</button>
@@ -2451,7 +2535,7 @@
           : filePick(`${op}.image`, false, 'img-drop', `<div class="img-cta">${ic('image', 22)}<span>Agregar imagen de la preparación</span><span class="small">JPG, PNG o foto de la cámara · se optimiza automáticamente</span></div>`)}
         ${eqBox}
         ${F('Nombre de la comida', I(`${op}.title`, { ph: 'Ej.: Avena con yogur, plátano y pan con huevo', attrs: 'aria-label="Nombre de la comida"' }), oi === m.sel ? 'Es el nombre que aparece en Distribución de comidas, en la minuta y en el portal del cliente.' : '')}
-        <div class="table-wrap">
+        ${isSteps(o) ? stepsEditor(o, op, t, tot) : `<div class="table-wrap">
           <table class="t foods-table">
             <thead><tr><th>Alimento</th><th>Porción de intercambio</th><th class="qty-th">${ic('edit', 12)} Cantidad indicada <span>(para el atleta)</span></th><th class="num">Porciones</th><th class="num">Gramos</th><th class="num">Kcal</th><th class="num">P (g)</th><th class="num">C (g)</th><th class="num">G (g)</th><th></th></tr></thead>
             <tbody>${lines || `<tr><td colspan="10" class="muted center" style="padding:18px">Sin alimentos. Agrega el primero.</td></tr>`}</tbody>
@@ -2462,7 +2546,7 @@
             </tfoot>
           </table>
         </div>
-        <div class="no-print"><button class="btn sm" data-action="addLine" data-p="${op}">${ic('plus', 14)} Agregar alimento</button></div>
+        <div class="no-print"><button class="btn sm" data-action="addLine" data-p="${op}">${ic('plus', 14)} Agregar alimento</button></div>`}
         ${F('Notas', TA(`${op}.notes`, { rows: 3, ph: 'Reemplazos, preparación, indicaciones…' }))}
       </div>
       </div>
@@ -2497,16 +2581,16 @@
       <div class="row mt16" style="justify-content:center"><button class="btn primary" data-action="menuView" data-v="dia">${ic('menu', 14)} Ir a las comidas</button></div></div>`;
     const q = normTxt(String(T.recipeQ || '').trim()), cf = T.recipeCat || '';
     const groupsAll = recipeGroups(a, all);
-    const hit = (r) => (!cf || normTxt(recCat(r)) === cf) && (!q || normTxt([r.name, r.cat, r.notes, ...(r.foods || []).map((l) => (foodById(l.foodId) || {}).name || l.foodName || '')].join(' ')).includes(q));
+    const hit = (r) => (!cf || normTxt(recCat(r)) === cf) && (!q || normTxt([r.name, r.cat, r.notes, ...optAllLines(r).map((l) => (foodById(l.foodId) || {}).name || l.foodName || '')].join(' ')).includes(q));
     const shown = all.filter(hit), groups = recipeGroups(a, shown);
     const card = (r) => {
-      const t = optTotals(r), foods = (r.foods || []).filter((l) => l.foodId || String(l.foodName || '').trim());
+      const t = optTotals(r), foods = optLines(r).filter((l) => l.foodId || String(l.foodName || '').trim());
       const fl = foods.slice(0, 6).map((l) => { const f = foodById(l.foodId), nm = f ? f.name : l.foodName, qty = String(l.cantidad || '').trim() || (num(l.porciones) ? `${fmt(num(l.porciones), 1)} ${num(l.porciones) === 1 ? 'porción' : 'porciones'}` : '');
         return `<li>${esc(nm)}${qty ? ` <span class="muted">· ${esc(qty)}</span>` : ''}</li>`; }).join('');
       return `<article class="card rec-card">
         ${r.image ? `<img class="rec-img" src="${imgSrc(r.image)}" alt="${esc(r.name || 'Receta')}">` : `<div class="rec-img rec-noimg" aria-hidden="true">${ic('book', 24)}</div>`}
         <div class="rec-body">
-          <div class="rec-name">${esc(r.name || 'Sin nombre')}</div>
+          <div class="rec-name">${esc(r.name || 'Sin nombre')}${isSteps(r) ? ' <span class="opt-steps-tag">por pasos</span>' : ''}</div>
           <div class="rec-mac"><span class="kc"><b>${fmt(t.kcal)}</b> kcal</span><span><span class="kp">P ${fmt(t.p)}</span> · <span class="kcarb">C ${fmt(t.c)}</span> · <span class="kg">G ${fmt(t.g)}</span></span></div>
           ${fl ? `<ul class="rec-foods">${fl}${foods.length > 6 ? `<li class="muted">y ${foods.length - 6} más…</li>` : ''}</ul>` : '<div class="muted small">Sin alimentos.</div>'}
           ${String(r.notes || '').trim() ? `<div class="rec-notes">${esc(String(r.notes).trim().slice(0, 180))}${String(r.notes).trim().length > 180 ? '…' : ''}</div>` : ''}
@@ -3406,11 +3490,12 @@
           ${String(m.indic || '').trim() ? `<div class="callout small" style="white-space:pre-wrap"><b>Indicaciones:</b> ${esc(m.indic)}</div>` : ''}
           ${o.image ? `<div class="img-drop img-has"><img src="${imgSrc(o.image)}" alt="${esc(o.title || m.name)}"></div>` : ''}
           ${o.title ? `<div class="opt-title">${esc(o.title)}</div>` : ''}
-          <div class="table-wrap"><table class="t foods-table">
+          ${isSteps(o) ? `<div class="sp-ro">${(optPrint(o).steps || []).map((x) => `<div class="sp-ro-col"><div class="sp-ro-h">${esc(stepHead(x))}</div><ul>${x.srcs.map(([n, q]) => `<li><span>${esc(n)}</span>${q ? `<b>${esc(q)}</b>` : ''}</li>`).join('')}</ul></div>`).join('') || '<div class="muted">Sin alimentos.</div>'}</div>
+          <div class="small muted mt8">Elige una opción de cada lista. Aporte de referencia: ${optMacros(o)}.</div>` : `<div class="table-wrap"><table class="t foods-table">
             <thead><tr><th>Alimento</th><th>Cantidad</th><th class="num">Porciones</th><th class="num">Kcal</th><th class="num">P (g)</th><th class="num">C (g)</th><th class="num">G (g)</th></tr></thead>
             <tbody>${rows || '<tr><td colspan="7" class="muted center" style="padding:16px">Sin alimentos.</td></tr>'}</tbody>
             <tfoot><tr><td colspan="3"><b>Aporte total</b></td><td class="m kc">${fmt(tot.kcal)}</td><td class="m kp">${fmt(tot.p, 1)}</td><td class="m kcarb">${fmt(tot.c, 1)}</td><td class="m kg">${fmt(tot.g, 1)}</td></tr></tfoot>
-          </table></div>
+          </table></div>`}
           ${o.notes ? `<div class="callout small" style="white-space:pre-wrap"><b>Notas:</b> ${esc(o.notes)}</div>` : ''}
         </div>
       </div>
@@ -3497,6 +3582,7 @@
   const MINUTA_RULES = `h1,h2,h3{margin:0}.pm-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:16px}
     h1{font-size:22px}.pm-eyebrow{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--pm-ink,#8a6a1f);font-weight:700}.pm-targets{text-align:right;font-size:11px;color:#333}
     .pm-meal{margin-bottom:18px}.pm-meal h2{display:flex;align-items:baseline;justify-content:space-between;gap:12px;font-size:14px;line-height:1.3;color:#fff;background:var(--pm-band,#111);border-radius:3px;padding:6px 10px;margin-bottom:10px;-webkit-print-color-adjust:exact;print-color-adjust:exact}.pm-meal h2 span{flex:none;font-weight:700;color:var(--pm-light,#f0cd82);font-size:12px}
+    .pm-step td{font-weight:700;text-transform:uppercase;letter-spacing:.03em;font-size:10px;color:var(--pm-ink,#8a6a1f);padding-top:7px}
     .pm-opt{break-inside:avoid;margin:0 0 14px;padding:10px 12px 12px;border:1.5px solid var(--pm-c,#d8b15f);border-left-width:5px;border-radius:8px;background:var(--pm-soft,#fffdf7);-webkit-print-color-adjust:exact;print-color-adjust:exact}.pm-opt h3{font-size:12.5px;margin-bottom:6px}
     .pm-opt img{max-height:180px;max-width:280px;object-fit:cover;border-radius:6px;display:block;margin-bottom:6px}
     table{width:100%;border-collapse:collapse;font-size:11px}th,td{border-bottom:1px solid #e3e3e3;padding:3px 5px;text-align:right}
@@ -3553,7 +3639,7 @@
     try { const r = await fetch(imgSrc(v)); if (!r.ok) return ''; return await blobToDataURL(await r.blob()); } catch { return ''; }
   }
   // Solo se imprimen las opciones que tienen al menos un alimento; las comidas sin ninguna opción con alimentos se omiten.
-  const minutaHasFood = (o) => (o.foods || []).some((l) => l.foodId || String(l.foodName || '').trim());
+  const minutaHasFood = (o) => optAllLines(o).some(lineHas);
   const minutaMeals = (dt) => dt.meals.map((m) => ({ m, opts: m.options.filter(minutaHasFood) })).filter((x) => x.opts.length);
   const minutaLabel = () => 'Descargar planificación';
   // Contenido de la minuta: lo usan el archivo descargado, la impresión y la vista previa (imgOf resuelve cada imagen).
@@ -3564,7 +3650,8 @@
         <h3>Opción ${k + 1}${o.title ? ' — ' + esc(o.title) : ''}</h3>
         ${o.image && imgOf(o.image) ? `<img src="${imgOf(o.image)}" alt="">` : ''}
         <table><thead><tr><th>Alimento</th><th>Cantidad</th></tr></thead><tbody>
-        ${o.foods.filter((l) => l.foodId || String(l.foodName || '').trim()).map((l) => { const x = lineCalc(l); return `<tr><td>${esc(x.f ? x.f.name : l.foodName || '')}</td><td>${esc(l.cantidad || '—')}</td></tr>`; }).join('')}
+        ${((pr) => (pr.steps ? pr.steps.map((x) => `<tr class="pm-step"><td colspan="2">${esc(stepHead(x))}</td></tr>${x.srcs.map(([n, q]) => `<tr><td>${esc(n)}</td><td>${esc(q || '—')}</td></tr>`).join('')}`).join('')
+          : pr.foods.map(([n, q]) => `<tr><td>${esc(n)}</td><td>${esc(q || '—')}</td></tr>`).join('')))(optPrint(o))}
         </tbody></table>
         ${mac ? `<div class="pm-total"><span class="pm-tl">Aporte total</span><b>${fmt(ot.kcal)} kcal</b><span>Proteína ${fmt(ot.p, 1)} g</span><span>Carbohidratos ${fmt(ot.c, 1)} g</span><span>Grasa ${fmt(ot.g, 1)} g</span></div>` : ''}
         ${o.notes ? `<div class="pm-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`; }).join('')}</div>`).join('');
@@ -3698,7 +3785,7 @@
           ${dt.meals.map((m, i) => { const eo = exOpt(m), ef = optFoods(eo), et = String((eo && eo.title) || '').trim();
             return `<tr><td>${pad(i + 1)}</td><td><b>${esc(m.name || `Comida ${i + 1}`)}</b></td><td>${esc(m.time || '—')}</td><td>${et || ef.length ? `${et ? `<b>${esc(et)}</b>` : ''}${ef.length ? `<div class="pd-ex">${ef.map(([fn, c]) => esc(c ? `${fn} (${c})` : fn)).join(' · ')}</div>` : ''}` : '<span class="pd-mute">—</span>'}</td><td>${String(m.indic || '').trim() ? nl(String(m.indic).trim()) : '<span class="pd-mute">—</span>'}</td></tr>`; }).join('')}
         </tbody></table>
-        ${mac ? `<p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) })}</b></p>` : ''}` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
+        ${mac ? `<p class="pd-foot">Día de ejemplo: <b>${optMacros({ foods: dt.meals.flatMap((m) => optLines(exOpt(m))) })}</b></p>` : ''}` : '<p class="pd-empty">Este tipo de día aún no tiene comidas.</p>'}</div>`;
     }).join('');
     const noteOf = (k) => String((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
     const notes = [['org', 'Cómo organizarte'], ['tip', 'Tip']].filter(([k]) => noteOf(k)).map(([k, l]) => `<div class="pd-note"><b>${l}.</b> ${nl(noteOf(k))}</div>`).join('');
@@ -3757,11 +3844,13 @@
     const rows = pm.map(({ m, opts }, i) => {
       const cells = opts.map((o, k) => {
         const ot = optTotals(o), img = o.image ? imgOf(o.image) : '';
-        const foods = o.foods.filter((l) => l.foodId || String(l.foodName || '').trim()).map((l) => { const x = lineCalc(l), c = String(l.cantidad || '').trim(); return `<tr><td>${esc(x.f ? x.f.name : l.foodName || '')}</td><td class="${c ? (c.length > 16 ? 'mg-q-long' : '') : 'mg-miss'}">${esc(c || '—')}</td></tr>`; }).join('');
+        const pr = optPrint(o), row = ([n, c]) => `<tr><td>${esc(n)}</td><td class="${c ? (c.length > 16 ? 'mg-q-long' : '') : 'mg-miss'}">${esc(c || '—')}</td></tr>`;
+        const foods = pr.steps ? '' : pr.foods.map(row).join('');
+        const steps = pr.steps ? pr.steps.map((x) => `<div class="mg-step">${esc(stepHead(x))}</div><table class="mg-ft"><tbody>${x.srcs.map(row).join('')}</tbody></table>`).join('') : '';
         return `<div class="mg-opt"><div class="mg-on">Opción ${k + 1}</div>${o.title ? `<div class="mg-dish">${esc(o.title)}</div>` : ''}
           ${img ? `<img class="mg-img" src="${img}" alt="">` : ''}
-          <table class="mg-ft"><tbody>${foods}</tbody></table>
-          ${mac ? `<div class="mg-tot">${fmt(ot.kcal)} kcal · P ${fmt(ot.p, 1)} g · C ${fmt(ot.c, 1)} g · G ${fmt(ot.g, 1)} g</div>` : ''}
+          ${pr.steps ? steps : `<table class="mg-ft"><tbody>${foods}</tbody></table>`}
+          ${mac ? `<div class="mg-tot">${pr.steps ? 'Referencia: ' : ''}${fmt(ot.kcal)} kcal · P ${fmt(ot.p, 1)} g · C ${fmt(ot.c, 1)} g · G ${fmt(ot.g, 1)} g</div>` : ''}
           ${o.notes ? `<div class="mg-notes"><b>Notas:</b> ${esc(o.notes).replace(/\n/g, '<br>')}</div>` : ''}</div>`;
       }).join('');
       return `<div class="mg-row"><div class="mg-meal"><b>${esc(String(m.name || '').trim() || `Comida ${i + 1}`)}</b>${m.time ? `<span>${esc(m.time)}</span>` : ''}</div>
@@ -3869,8 +3958,7 @@
   const MINUTA_FITS = [[64, [9.5, 9, 8.5, 8, 7.5]], [54, [9.5, 9, 8.5, 8, 7.5]], [46, [9, 8.5, 8, 7.5]], [38, [8, 7.5, 7, 6.5]], [30, [7, 6.5, 6]], [24, [6.5, 6]], [0, [9.5, 9, 8.5, 8, 7.5, 7, 6.5, 6, 5.5, 5]]];
   function minutaGridData(kit, pm, imgOf) {
     const { str } = kit;
-    return pm.map(({ m, opts }) => ({ m, opts: opts.map((o) => ({ o, ot: optTotals(o), img: o.image ? imgOf(o.image) : null,
-      foods: o.foods.filter((l) => l.foodId || str(l.foodName).trim()).map((l) => { const x = lineCalc(l); return [str(x.f ? x.f.name : l.foodName), str(l.cantidad).trim()]; }) })) }));
+    return pm.map(({ m, opts }) => ({ m, opts: opts.map((o) => { const pr = optPrint(o, str); return { o, ot: optTotals(o), img: o.image ? imgOf(o.image) : null, foods: pr.foods, steps: pr.steps }; }) }));
   }
   const MG = { MW: 92, GAP: 5 };
   // Ancho de la franja de tiempos de comida: el del título (u hora) más largo, para dejar el resto a las opciones.
@@ -3885,9 +3973,11 @@
         const st = [{ text: `Opción ${k + 1}`, bold: true, color: sc.ink, fontSize: fs + 0.5, alignment: 'center' }];
         if (d.o.title) st.push({ text: d.o.title, bold: true, fontSize: fs + 0.5, alignment: 'center', margin: [0, 1, 0, 0] });
         if (d.img && imgH) st.push({ image: d.img, fit: [iw, imgH], alignment: 'center', margin: [0, 4, 0, 0] });
-        if (d.foods.length) st.push({ margin: [0, 4, 0, 0], table: { widths: ['*', 'auto'], body: d.foods.map(([nm, c]) => [{ text: nm, fontSize: fs }, { text: c || '—', bold: true, fontSize: fs, alignment: 'right', color: c ? '#111' : '#999' }]) },
+        const ftable = (rows, mt) => ({ margin: [0, mt, 0, 0], table: { widths: ['*', 'auto'], body: rows.map(([nm, c]) => [{ text: nm, fontSize: fs }, { text: c || '—', bold: true, fontSize: fs, alignment: 'right', color: c ? '#111' : '#999' }]) },
           layout: { hLineWidth: (j, node) => (j === 0 || j === node.table.body.length ? 0 : 0.5), vLineWidth: () => 0, hLineColor: () => sc.line, paddingLeft: () => 1, paddingRight: () => 1, paddingTop: () => 1, paddingBottom: () => 1 } });
-        if (mac) st.push({ text: `${fmt(d.ot.kcal)} kcal · P ${fmt(d.ot.p, 1)} g · C ${fmt(d.ot.c, 1)} g · G ${fmt(d.ot.g, 1)} g`, fontSize: fs - 0.5, bold: true, color: sc.ink, alignment: 'center', margin: [0, 3, 0, 0] });
+        if (d.steps) d.steps.forEach((x) => { st.push({ text: stepHead(x).toUpperCase(), bold: true, color: sc.ink, fontSize: fs - 0.5, characterSpacing: 0.2, alignment: 'left', margin: [0, 4, 0, 0] }); st.push(ftable(x.srcs, 1)); });
+        else if (d.foods.length) st.push(ftable(d.foods, 4));
+        if (mac) st.push({ text: `${d.steps ? 'Referencia: ' : ''}${fmt(d.ot.kcal)} kcal · P ${fmt(d.ot.p, 1)} g · C ${fmt(d.ot.c, 1)} g · G ${fmt(d.ot.g, 1)} g`, fontSize: fs - 0.5, bold: true, color: sc.ink, alignment: 'center', margin: [0, 3, 0, 0] });
         if (d.o.notes) st.push({ text: [{ text: 'Notas: ', bold: true }, str(d.o.notes)], fontSize: fs - 0.5, color: '#333', margin: [0, 2, 0, 0] });
         return { stack: st, fillColor: sc.soft };
       });
@@ -4010,7 +4100,7 @@
             return [{ text: pad(i + 1), color: '#666' }, { text: str(m.name) || `Comida ${i + 1}`, bold: true }, str(m.time) || '—',
               et || ef.length ? { stack: [].concat(et ? [{ text: et, bold: true }] : [], ef.length ? [{ text: ef.map(([fn, c]) => (c ? `${fn} (${c})` : fn)).join(' · '), fontSize: 7.5, color: '#444', margin: [0, 1, 0, 0] }] : []) } : { text: '—', color: '#999' },
               str(m.indic).trim() ? str(m.indic).trim() : { text: '—', color: '#999' }]; })) }, layout: Object.assign({}, lines, { paddingTop: () => 4, paddingBottom: () => 4 }), fontSize: 8.5 }]
-          .concat(mac ? [{ text: [{ text: 'Día de ejemplo: ' }, { text: optMacros({ foods: dt.meals.flatMap((m) => (exOpt(m) || {}).foods || []) }), bold: true }], fontSize: 8, color: '#444', margin: [0, 5, 0, 0] }] : [])
+          .concat(mac ? [{ text: [{ text: 'Día de ejemplo: ' }, { text: optMacros({ foods: dt.meals.flatMap((m) => optLines(exOpt(m))) }), bold: true }], fontSize: 8, color: '#444', margin: [0, 5, 0, 0] }] : [])
         : [empty('Este tipo de día aún no tiene comidas.')]) });
     });
     const noteOf = (k) => str((a.distNotes && a.distNotes[k] != null) ? a.distNotes[k] : DIST_NOTES[k]).trim();
@@ -4377,7 +4467,7 @@
           dest.meals.push(target);
         } else {
           target = dest.meals.find((m) => m.id === mid);
-          const o0 = target.options[0], empty = target.options.length === 1 && !o0.title && !o0.image && !o0.foods.length && !o0.notes;
+          const o0 = target.options[0], empty = target.options.length === 1 && optEmpty(o0);
           if (empty) { target.options = opts; target.sel = 0; target.active = 0; } else { target.active = target.options.length; target.options.push(...opts); }
           collapsed.delete(target.id); saveCollapsed();
         }
@@ -4389,7 +4479,7 @@
     // Guarda la opción visible de una comida como receta (o actualiza la receta que salió de esa opción).
     saveRecipe(el) {
       const a = A(), m = getP(el.dataset.m), o = m && m.options[+el.dataset.k]; if (!o) return;
-      if (!String(o.title || '').trim() && !(o.foods || []).length) { toast('La opción está vacía: ponle nombre o agrega alimentos antes de guardarla.'); return; }
+      if (!String(o.title || '').trim() && !optAllLines(o).some(lineHas)) { toast('La opción está vacía: ponle nombre o agrega alimentos antes de guardarla.'); return; }
       const ex = recipesOf().find((r) => r.srcOpt === o.id), cats = recipeCatList(a);
       promptModal('Guardar en el recetario', `
         <div class="callout small">El recetario es tuyo: la receta queda disponible para todos tus atletas, en cualquier comida de cualquier tipo de día. Se guarda una copia (nombre, imagen, alimentos y notas): si después cambias esta opción, la receta no cambia hasta que la guardes de nuevo.</div>
@@ -4397,9 +4487,9 @@
         ${F('Nombre de la receta', `<input class="input" id="r-name" value="${esc(String(o.title || '').trim())}" placeholder="Ej.: Avena con yogur, plátano y pan con huevo">`)}
         ${F('Tiempo de comida', `<input class="input" id="r-cat" list="r-cats" value="${esc(ex ? ex.cat || '' : String(m.name || '').trim())}" placeholder="Ej.: Desayuno"><datalist id="r-cats">${cats.map((c) => `<option value="${esc(c)}">`).join('')}</datalist>`, 'El recetario agrupa las recetas por tiempo de comida.')}`, () => {
         const name = $('#r-name').value.trim() || String(o.title || '').trim() || String(m.name || '').trim() || 'Receta', cat = $('#r-cat').value.trim();
-        const data = { name, cat, image: o.image || null, foods: clone(o.foods || []), notes: o.notes || '', srcOpt: o.id, updatedAt: todayISO() };
+        const data = { name, cat, image: o.image || null, foods: clone(o.foods || []), notes: o.notes || '', srcOpt: o.id, updatedAt: todayISO(), ...(isSteps(o) ? { steps: clone(o.steps) } : {}) };
         const upd = ex && $('#r-mode') && $('#r-mode').value === 'upd';
-        if (upd) Object.assign(ex, data); else recipesOf().push(Object.assign({ id: uid(), createdAt: todayISO() }, data));
+        if (upd) { Object.assign(ex, data); if (!isSteps(o)) delete ex.steps; } else recipesOf().push(Object.assign({ id: uid(), createdAt: todayISO() }, data));
         closeModal(); commit(); toast(`«${name}» ${upd ? 'actualizada' : 'guardada'} en el recetario${cat ? ` · ${cat}` : ''}.`);
       }, 'Guardar');
     },
@@ -4414,12 +4504,12 @@
         ${F('Tiempo de comida', `<select class="select" id="m-meal">${mealOptions(def, nm)}</select>`, 'Se agrega como opción nueva de esa comida (si la comida está vacía, ocupa su lugar). La copia es independiente de la receta.')}
         <label class="chk-line"><input type="checkbox" id="m-main"> Usarla como opción principal (★, la que cuenta en el total del día)</label>`, () => {
         const dest = a.dayTypes.find((d) => d.id === $('#m-day').value), mid = $('#m-meal').value;
-        const o = { id: uid(), title: r.name || '', image: r.image || null, foods: clone(r.foods || []), notes: r.notes || '', recipeId: r.id };
+        const o = { id: uid(), title: r.name || '', image: r.image || null, foods: clone(r.foods || []), notes: r.notes || '', recipeId: r.id, ...(isSteps(r) ? { steps: clone(r.steps) } : {}) };
         let target, k = 0;
         if (mid === '__new') { target = Object.assign(newMeal(nm, '', 0), { options: [o], sel: 0, active: 0 }); dest.meals.push(target); }
         else {
           target = dest.meals.find((m) => m.id === mid);
-          const o0 = target.options[0], empty = target.options.length === 1 && !o0.title && !o0.image && !o0.foods.length && !o0.notes;
+          const o0 = target.options[0], empty = target.options.length === 1 && optEmpty(o0);
           if (empty) { target.options = [o]; target.sel = 0; } else { target.options.push(o); k = target.options.length - 1; }
           collapsed.delete(target.id); saveCollapsed();
         }
@@ -4559,10 +4649,40 @@
     expandAll() { activeDay(A()).meals.forEach((m) => collapsed.delete(m.id)); saveCollapsed(); render(); },
     viewOpt(el) { getP(el.dataset.m).active = +el.dataset.k; commit(); },
     addOpt(el) { const m = getP(el.dataset.m); m.options.push(newOption()); m.active = m.options.length - 1; commit(); },
+    // Opción por pasos (si la comida solo tiene una opción vacía, la reemplaza).
+    addStepsOpt(el) {
+      const m = getP(el.dataset.m), o = newStepsOption();
+      if (m.options.length === 1 && optEmpty(m.options[0])) { m.options = [o]; m.sel = 0; m.active = 0; } else { m.options.push(o); m.active = m.options.length - 1; }
+      collapsed.delete(m.id); saveCollapsed(); commit();
+      toast('Opción por pasos creada: anota las fuentes de cada lista y marca con ★ la de referencia.');
+    },
+    addStep(el) {
+      const o = getP(el.dataset.p); if (!isSteps(o)) return; o.steps.push(newStep()); commit();
+      setTimeout(() => { const ins = document.querySelectorAll(`[data-bind="${el.dataset.p}.steps.${o.steps.length - 1}.name"]`); ins[0]?.select(); }, 0);
+    },
+    delStep(el) {
+      const o = getP(el.dataset.p), i = +el.dataset.i, st = o && o.steps && o.steps[i]; if (!st) return;
+      const go = () => { o.steps.splice(i, 1); closeModal(); commit(); };
+      if (stepItems(st).some((it) => (it.foods || []).some(lineHas))) confirmModal('Quitar lista', `Se quitará la lista <b>${esc(st.name || 'sin nombre')}</b> con sus fuentes.`, go, 'Quitar');
+      else go();
+    },
+    addStepItem(el) {
+      const st = getP(el.dataset.p); if (!st) return; if (!Array.isArray(st.items)) st.items = [];
+      st.items.push(newStepItem()); commit();
+      setTimeout(() => { const ins = document.querySelectorAll(`[data-food^="${el.dataset.p}.items.${st.items.length - 1}.foods."]`); ins[0]?.focus(); }, 0);
+    },
+    delStepItem(el) {
+      const st = getP(el.dataset.p), k = +el.dataset.k; if (!st || !stepItems(st)[k]) return;
+      const go = () => { const s0 = stepSelIdx(st); st.items.splice(k, 1); st.sel = s0 > k ? s0 - 1 : s0 === k ? 0 : s0; closeModal(); commit(); };
+      if ((st.items[k].foods || []).some(lineHas)) confirmModal('Quitar fuente', `Se quitará la fuente ${k + 1} de <b>${esc(st.name || 'la lista')}</b> con sus alimentos.`, go, 'Quitar');
+      else go();
+    },
+    stepPick(el) { const st = getP(el.dataset.p); if (st) { st.sel = +el.dataset.k; commit(); } },
+    pasteLine(el) { if (!clip || clip.kind !== 'food') return; const it = getP(el.dataset.p); if (!it) return; it.foods.push(clone(clip.copy)); commit(); toast('Alimento pegado en la fuente.'); },
     copyOpt(el) {
       const dt = activeDay(A()), m = getP(el.dataset.m), k = +el.dataset.k, o = m.options[k];
       const n = dt.meals.indexOf(m) + 1;
-      clip = { kind: 'opt', data: clone(o), srcId: o.id, label: o.title ? o.title.slice(0, 50) : `Opción ${n}.${k + 1} · ${o.foods.length} ${o.foods.length === 1 ? 'alimento' : 'alimentos'}`, from: `${dt.name} · ${m.name}` };
+      clip = { kind: 'opt', data: clone(o), srcId: o.id, label: o.title ? o.title.slice(0, 50) : `Opción ${n}.${k + 1} · ${isSteps(o) ? `por pasos, ${o.steps.length} ${o.steps.length === 1 ? 'lista' : 'listas'}` : `${o.foods.length} ${o.foods.length === 1 ? 'alimento' : 'alimentos'}`}`, from: `${dt.name} · ${m.name}` };
       render(); toast('Opción copiada. Pulsa «Pegar opción» en la comida donde la quieras.');
     },
     copyLine(el) {
@@ -4576,11 +4696,12 @@
       const m = getP(el.dataset.m);
       if (clip.kind === 'opt') {
         const c = Object.assign(clone(clip.data), { id: uid() });
-        const o0 = m.options[0], empty = m.options.length === 1 && !o0.title && !o0.image && !o0.foods.length && !o0.notes;
+        const o0 = m.options[0], empty = m.options.length === 1 && optEmpty(o0);
         if (empty) { m.options = [c]; m.sel = 0; m.active = 0; } else { m.options.push(c); m.active = m.options.length - 1; }
         toast(`Opción pegada en ${m.name}${empty ? '' : ' como opción nueva'}.`);
       } else {
         const oi = clamp(m.active || 0, 0, m.options.length - 1);
+        if (isSteps(m.options[oi])) { toast('Esta opción es por pasos: pega el alimento con el botón Pegar de la fuente donde lo quieras.'); return; }
         m.options[oi].foods.push(clone(clip.copy));
         toast(`Alimento pegado en ${m.name} · Opción ${oi + 1}.`);
       }
@@ -4707,7 +4828,7 @@
     },
     delFood(el) {
       const f = S.foods.find((x) => x.id === el.dataset.id);
-      const used = S.athletes.some((a) => a.dayTypes.some((d) => d.meals.some((m) => m.options.some((o) => o.foods.some((l) => l.foodId === f.id)))));
+      const used = S.athletes.some((a) => a.dayTypes.some((d) => d.meals.some((m) => m.options.some((o) => optAllLines(o).some((l) => l.foodId === f.id)))));
       confirmModal('Eliminar alimento', `Se eliminará <b>${esc(f.name)}</b> de la base.${used ? ' <br><br><span style="color:var(--warn)">Está en uso en algún menú: esas líneas quedarán sin datos.</span>' : ''}`, () => { S.foods = S.foods.filter((x) => x.id !== f.id); closeModal(); commit(); });
     },
 

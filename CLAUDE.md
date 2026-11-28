@@ -95,6 +95,13 @@ Forma de trabajar con el usuario:
   - El Panel muestra `rolling7`, la media de 7 días frente a los 7 días anteriores.
   - El gráfico muestra una banda con el rango esperado (`expectedAt`) y la media móvil.
 - **Menú diario:** el encabezado «total del día» compara la suma de las opciones ★ con las metas de la etapa elegida en «Metas de la etapa» (`menuStageOf`, guardada en `a.ui.menuStage`; por defecto, la vigente `currentStage`). Si no es la vigente, se avisa. La Distribución y el documento (minuta y distribución, en la vista previa y el PDF) usan esas mismas metas (`menuTargets`) y lo indican (`menuStageNote`). El resumen del atleta y el plan publicado al cliente siguen con la etapa vigente.
+- **Opción por pasos** (`isSteps(o)`):
+  - Es un tipo de opción de comida, junto a las normales (botón «Por pasos»). Si la comida solo tenía una opción vacía, la reemplaza.
+  - `o.steps = [{ id, name, macro: 'c'|'p'|'g'|'kcal', sel, items: [{ id, foods: [línea…] }] }]`; `o.foods` queda vacío. Parte con Carbohidratos (c), Proteínas (p), Ensaladas (kcal) y Frutas (c), editables. Cada fuente (`item`) tiene uno o más alimentos.
+  - En cada lista cuenta la fuente ★ (`sel`): `optLines(o)` da las líneas que suman (`optTotals`, total del día, Distribución). `optAllLines(o)` da todas (para imprimir y saber si un alimento se usa).
+  - Cada fuente muestra su aporte, el % de la meta del día (etapa elegida) en el macro de su lista y la diferencia frente a la ★.
+  - Al imprimir (`optPrint`) van todas las fuentes de cada lista («Carbohidratos · elige 1»); una fuente con varios alimentos va en una fila («Lechuga + Tomate»). Igual en el portal del cliente (`planSnapshot` incluye `steps`), el recetario y copiar/pegar.
+  - Campo opcional: las opciones existentes no cambian, así que no hubo migración.
 - **Recetario:**
   - Está en `S.recipes` y es global, compartido entre atletas.
   - Se guarda desde una opción del menú y se agrupa por tiempo de comida.
@@ -132,7 +139,7 @@ Criterios ya aprobados por el usuario:
 - Para etapas de pérdida: Moderado, y Conservador como tramo desde la semana en que la planilla pasa a 0,5 %.
 - 12 semanas.
 - Carga solo las opciones de menú completas. Si una opción completa no tiene nombre, ponle uno descriptivo.
-- Un almuerzo "por pasos" va como una sola opción, con una combinación de referencia y las alternativas en notas.
+- Un almuerzo "por pasos" va como una sola opción, con una combinación de referencia y las alternativas en notas. (Ahora existe la opción por pasos: pregunta al usuario si la usa al cargar planillas.)
 - Si la planilla excluye la colación del total, usa «Sin colación (es opcional)» como opción principal ★.
 - Las imágenes van como JPEG en data URL, de máximo 1400 px y calidad 82.
 - Avisa al usuario de cualquier inconsistencia que encuentres sin corregirla por tu cuenta (macros que no cuadran, alimentos que el atleta no come, pesos distintos entre hojas).
@@ -144,7 +151,6 @@ Criterios ya aprobados por el usuario:
 - Cambios de macros con fecha dentro de una etapa, y rangos de macros.
 - Panel: gráfico del % frente a la meta, pasos semanales, promedios de los últimos 7 días, variación de perímetros.
 - Controles irregulares.
-- Comidas por pasos como estructura propia.
 - Importar historial con revisión de los datos.
 - Autorregistro del cliente fuera del artifact.
 - Reglas para etapas de volumen y mantención.
